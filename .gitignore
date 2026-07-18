@@ -1,0 +1,16 @@
+# Build-Zwischenprodukte (avr-gcc) — die .hex bleiben bewusst im Repo (Flash-Dateien)
+*.elf
+*.o
+*.map
+
+# Arduino-Sketch-Build-Ordner (Zwischenprodukte des IDE/arduino-cli-Builds)
+build/
+
+# Python
+__pycache__/
+*.pyc
+
+# Editor / OS
+.vscode/
+.DS_Store
+Thumbs.db
