@@ -2,6 +2,7 @@
 *.elf
 *.o
 *.map
+*.lst
 
 # Arduino-Sketch-Build-Ordner (Zwischenprodukte des IDE/arduino-cli-Builds)
 build/
