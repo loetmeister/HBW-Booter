@@ -53,9 +53,12 @@
 
 /* ======================= Chip-Portabilitaet ======================= */
 #if defined(__AVR_ATmega328P__) || defined(__AVR_ATmega328__) \
+ || defined(__AVR_ATmega644P__)  || defined(__AVR_ATmega644PA__) \
+ || defined(__AVR_ATmega644__)   || defined(__AVR_ATmega644A__) \
  || defined(__AVR_ATmega1284P__) || defined(__AVR_ATmega1284__)
-  /* 328P und 1284P sind registergleich (UART0, MCUSR, TIFR1). Der 1284P hat nur
-     zusaetzlich RAMPZ (in main() auf 0) und eine hoehere Boot-Section (BOOT_START). */
+  /* 328P / 644P(A) / 1284P sind registergleich (UART0, MCUSR, TIFR1). Nur der 1284P hat
+     zusaetzlich RAMPZ (in main() auf 0) -- 644P/328P haben <=64 KB Flash, kein RAMPZ. Die
+     Boot-Section-Adresse (BOOT_START) folgt generisch aus FLASHEND. */
   #define RESET_FLAGS  MCUSR
   #define U_UCSRA UCSR0A
   #define U_UCSRB UCSR0B
@@ -261,15 +264,11 @@ static void startApp(void){
 }
 
 /* ======================= Flash schreiben (avr/boot.h) ======================= */
-/* Booter-Section-Start (Byte-Adresse) -- der Booter darf sich NIE selbst ueberschreiben.
-   1284P: Boot @0x1F000 (2048 Words, BOOTSZ=00) im oberen 64-KB-Bereich.
-   32A/328P: Boot @0x7000 (2048 Words). Bei App <64 KB liegt jede 16-bit-w-Adresse
-   ohnehin <0x10000 -> beim 1284P greift der Schutz nie, ist aber korrekt gesetzt. */
-#if defined(__AVR_ATmega1284P__) || defined(__AVR_ATmega1284__)
-  #define BOOT_START 0x1F000UL
-#else
-  #define BOOT_START 0x7000UL
-#endif
+/* Booter-Section-Start (Byte-Adresse) = oberste 4 KB (2048 Words, BOOTSZ=00) des Flash,
+   generisch aus FLASHEND: 32A/328P 0x7000 (32 KB), 644P/644PA 0xF000 (64 KB), 1284P 0x1F000
+   (128 KB). Der Booter darf sich hier NIE selbst ueberschreiben. Muss zur Boot-Adresse im
+   build.sh-Linkerflag passen (beide = FLASHEND + 1 - 0x1000). */
+#define BOOT_START ((uint32_t)(FLASHEND + 1UL - 0x1000UL))
 static uint8_t  pageBuf[SPM_PAGESIZE];
 static uint16_t pageBase = 0xFFFF;
 static uint8_t  pageDirty = 0;

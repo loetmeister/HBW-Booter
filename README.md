@@ -37,7 +37,8 @@ Watchdog-Reset (von der App per 'u') ─▶ im Booter bleiben  ─▶ Update-Mod
 ```
 
 Der Booter liegt in der Boot-Section (2048 Words / 4 KB, `BOOTSZ=00`) — beim **32A/328P ab 0x7000**
-(App 0x0000–0x6FFF), beim **1284P ab 0x1F000** (App unter 0x10000, siehe unten). Beim Reset läuft
+(App 0x0000–0x6FFF), beim **644P ab 0xF000**, beim **1284P ab 0x1F000** (App unter 0x10000, siehe
+unten). Beim Reset läuft
 dank `BOOTRST` zuerst der Booter, liest das Reset-Flag `MCUSR`, und entscheidet App-Start oder
 Update-Modus.
 
@@ -81,13 +82,15 @@ bliebe hängen und liefe in den Response-Timeout. Die Nutzdaten liest sie trotzd
 |-------|-------|
 | `hbw_booter.c` | der Booter (C, für **avr-gcc**, portabel 32A/328P) |
 | `build.sh` | Build-Skript (avr-gcc, `--section-start=.text=0x7000`) |
-| `hbw_booter_atmega328p.hex` / `_atmega32.hex` / `_atmega1284p.hex` | kompilierte Booter (~2,6–2,8 KB) |
+| `hbw_booter_atmega328p.hex` / `_atmega32.hex` / `_atmega644p.hex` / `_atmega1284p.hex` | kompilierte Booter (~2,6–2,8 KB) |
 | `hbw_testapp/` | Test-App (Arduino-Sketch) mit `u`-Handler; meldet FW `0003` |
 | `hbw_testapp_v5/` | dieselbe App als Version `0005` (zum Sichtbarmachen des Flash-Erfolgs) |
 | `hbw_testapp_328p.hex` / `hbw_testapp_v5_328p.hex` | deren `.hex` |
+| `hbw_testapp_644p/` + `hbw_testapp_644p.hex` | dieselbe Test-App als **ATmega644P/644PA**-Sketch (MightyCore) + `.hex` |
 | `hbw_testapp_1284p/` + `hbw_testapp_1284p.hex` | dieselbe Test-App als **ATmega1284P**-Sketch (MightyCore) + `.hex` |
 | `hbw_combined_328p.hex` | **DIE ISP-Flash-Datei: HBW-IO-4-FM-App + Booter**, jeweils aktueller Stand |
 | `hbw_combined_TESTAPP_328p.hex` | Test-App v3 + Booter — eingefrorene Referenz aus dem M1/M2-Test |
+| `hbw_combined_644p.hex` | **ISP-Flash-Datei 644P**: Test-App + Booter `@0xF000` (per `merge_hex.py`) |
 | `hbw_combined_1284p.hex` | **ISP-Flash-Datei 1284P**: Test-App + Booter `@0x1F000` (per `merge_hex.py`) |
 | `hbw_io_4_fm.hex` | HBW-IO-4-FM-App allein (für den Bus-Flash per `flash_tool.py`) |
 | `flash_tool.py` | **Sender**: flasht eine `.hex` über Bus/USB (`z z→u→p→w…→v→g`) |
@@ -115,12 +118,13 @@ avrdude -c usbasp -p m1284p -U flash:w:hbw_combined_1284p.hex:i -U hfuse:w:0x90:
 |-----|------|:----------------:|:---------------:|--------------|
 | ATmega328P | `m328p` | **0xD8** | 0xD0 | `lfuse=0xFF`, `efuse=0xFD` unverändert |
 | ATmega32A | `m32` | **0x98** | 0x90 | **`lfuse` unverändert** (CKSEL/CKOPT = Oszillator) |
+| ATmega644P/644PA | `m644p` | **0x98** | 0x90 | **`lfuse`/`efuse` unverändert** (CKSEL/SUT = Oszillator) |
 | ATmega1284P | `m1284p` | **0x98** | 0x90 | **`lfuse`/`efuse` unverändert** (CKSEL/SUT = Oszillator) |
 
-Bei 32A **und** 1284P hat der Default (`hfuse=0x99`) `BOOTSZ=2048` (Bit 2:1 = 00) **schon gesetzt** —
+Bei 32A, 644P **und** 1284P hat der Default (`hfuse=0x99`) `BOOTSZ=2048` (Bit 2:1 = 00) **schon gesetzt** —
 es ist nur `BOOTRST` (Bit 0) auf 0 zu ziehen (→ `0x98`), optional zusätzlich `EESAVE` (Bit 3, → `0x90`),
 damit die Bus-Adresse im EEPROM einen Flash überlebt (**für echte Geräte empfohlen**). Beim 1284P liegt
-die Boot-Section dann bei `0x1F000`, beim 32A/328P bei `0x7000` — der Booter wird pro MCU passend
+die Boot-Section dann bei `0x1F000`, beim 644P bei `0xF000`, beim 32A/328P bei `0x7000` — der Booter wird pro MCU passend
 gelinkt (`build.sh`). *(Die `hbw_combined_1284p.hex` entsteht wie beim 328P per Merge:
 App-`.hex` unter `0x10000` + `hbw_booter_atmega1284p.hex` ab `0x1F000`.)*
 
@@ -233,10 +237,10 @@ H16V0   hbw_io_4_fm_v304.hex   @0x6FF0   #HBW-IO-4-FM v3.04   (Image <0x7000, Ve
 ## Bauen
 
 ```sh
-sh build.sh                 # Booter für 32A + 328P + 1284P, .hex + Größe
+sh build.sh                 # Booter für 32A + 328P + 644P + 1284P, .hex + Größe
 ```
 Toolchain = Arduino-avr-gcc 7.3.0. Der Booter ist **kein** Arduino-Sketch (Boot-Section-Linking).
-`build.sh` linkt je MCU an die passende Boot-Adresse (32A/328P `0x7000`, 1284P `0x1F000`).
+`build.sh` linkt je MCU an die passende Boot-Adresse (32A/328P `0x7000`, 644P `0xF000`, 1284P `0x1F000`).
 
 **1284P-Test-Kandidat** (App + Booter → ISP-Datei für den USB-Serial-Test, wie damals beim 328P):
 
@@ -266,6 +270,7 @@ Booter-Konfigblock auf den Modultyp setzen.
 | **CCU-Update vollständig, eigene App läuft danach** | ✅ **HW-verifiziert** — HBW-IO-4-FM **v3.04** über WebUI geflasht, Gerät bootet + meldet Announce FW `0x0304` |
 | **WebUI meldet „Firmware-Update erfolgreich"** | ✅ **HW-verifiziert** (Screenshot + Log) — `r`-Verify komplett inkl. Versionsfeld `@0x6FF0`, danach `h`/`v` → FW `3.04` |
 | ATmega32A (Code portabel, `hfuse` dokumentiert) | ✅ kompiliert (2646 B) · ⏳ HW-Test am echten RS485 offen |
+| ATmega644P/644PA (Boot @0xF000, 64 KB = ganzer Flash adressierbar) | ✅ portiert + kompiliert (2732 B) · ⏳ HW-Test offen |
 | ATmega1284P, App < 64 KB (Boot @0x1F000, `RAMPZ=0`) | ✅ portiert + kompiliert (2770 B) · ⏳ HW-Test offen |
 | ATmega1284P, App > 64 KB (Bank-Byte, nur eigener Sender) | ⏳ bewusst zurückgestellt — bei Bedarf nachrüstbar |
 
