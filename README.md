@@ -1,8 +1,10 @@
 # HBW-Booter — Over-the-Bus-Firmware-Update für HMW/HBWired-Geräte
 
-Eigener Bootloader für ATmega32A / ATmega328P, mit dem sich HomeMatic-Wired-Eigenbau-Geräte
-(HBWired) **über den RS485-Bus bzw. seriell flashen** lassen — ohne ISP, ohne Ausbau. Der Booter
-wird **einmalig** per ISP eingespielt; danach läuft jedes weitere Firmware-Update über die Leitung.
+Eigener Bootloader für **ATmega328P, ATmega32A, ATmega644P/644PA und ATmega1284P**, mit dem sich
+HomeMatic-Wired-Eigenbau-Geräte (HBWired) **über den RS485-Bus flashen** lassen — ohne ISP, ohne
+Ausbau. Der Booter wird **einmalig** per ISP eingespielt; danach läuft jedes weitere Firmware-Update
+über die Leitung (per `flash_tool.py`, über das [HMW-Gateway](https://github.com/maxx3105/HMW-Gateway-Pro)
+per Web-Upload, oder über die native CCU-WebUI).
 
 **Stand: abgeschlossen.** Ein **eigenes** Gerät (HBW-IO-4-FM, App v3.04) wurde **komplett über die
 echte CCU-WebUI** per Bus geflasht — die CCU meldet selbst **„Firmware-Update erfolgreich"**, der
@@ -135,6 +137,9 @@ App-`.hex` unter `0x10000` + `hbw_booter_atmega1284p.hex` ab `0x1F000`.)*
 
 ### 2. Ab jetzt: über den Bus flashen — kein ISP mehr
 
+Drei Wege, die alle dieselbe Booter-Choreografie fahren:
+
+**a) `flash_tool.py`** — direkt über einen USB-RS485-Adapter am PC:
 ```sh
 python flash_tool.py COM12 hbw_testapp_v5_328p.hex
 ```
@@ -144,6 +149,13 @@ w  →  … Blöcke ge-ACKt … ok        (Page 0 zuletzt)
 v  →  … byte-genau zurückgelesen … ok
 g  →  CRC-Check → neue App startet  (ANNOUNCE FW=0005)
 ```
+
+**b) HMW-Gateway (`/flash`)** — die bequemste Variante: im Browser die `.ino.hex` hochladen; das
+Gateway sucht die Geräte am Bus (zeigt Typ/FW/Serial) und flasht über die Leitung — kein PC-Adapter,
+kein Merge. Siehe [github.com/maxx3105/HMW-Gateway-Pro](https://github.com/maxx3105/HMW-Gateway-Pro).
+
+**c) Native CCU-WebUI** — *Einstellungen → Geräte-Firmware → Update*; den Transport macht die
+`hs485d`. Siehe [CCU-Update über die native hs485d](#ccu-update-über-die-native-hs485d).
 
 ## Absicherungen
 
@@ -167,24 +179,133 @@ g  →  CRC-Check → neue App startet  (ANNOUNCE FW=0005)
   geflashte App startet er dabei nie: dann ist Page 0 gelöscht → Reset-Vektor `0xFFFF` → er
   bleibt im Update-Modus.
 
+## Verify & Brick-Schutz — was bei einem Abbruch passiert
+
+**Verify in zwei Stufen.** Nach der `w`-Schleife wird zweifach geprüft:
+1. **Zurücklesen (`r`, senderseitig):** Der Sender liest jeden Block per `r` aus dem Flash zurück und
+   vergleicht **byte-genau** gegen das Image. Ein Mismatch → **kein `g`**, die App startet nicht.
+2. **CRC-Gate (`g`, im Gerät):** Der Booter rechnet die CRC16 über die ganze App aus dem tatsächlichen
+   Flash-Inhalt nach und springt **nur bei Match** hinein. Beides muss passen, sonst läuft die neue
+   Firmware nicht an.
+
+**Wie lange bleibt das Gerät im Update-Modus?** Solange Bus-Verkehr läuft, beliebig lange — jeder
+empfangene Frame setzt den Timer zurück. Wird der Bus still, hängt es vom Zustand ab:
+
+| Situation | Verhalten |
+|-----------|-----------|
+| Bus still, App intakt | Rückfall in die App nach **~25 s** (`IDLE_TIMEOUT_OVF`, Timer1 clk/1024, 6 × ~4,19 s @16 MHz) |
+| Abbruch **vor** dem ersten `w` | App noch intakt → derselbe ~25-s-Rückfall (selbstheilend) |
+| Abbruch **nach** dem ersten `w` | bleibt **dauerhaft** im Update-Modus, auch über Power-Cycle |
+
+**Brick-Schutz.** Der erste `w` löscht Page 0 (den Reset-Vektor). Ab da verlangen sowohl der
+25-s-Timeout als auch der Power-on-Pfad eine **intakte App** (`pgm_read_word(0) != 0xFFFF`) — beide
+starten also **nie** eine halb geschriebene App, das Gerät wartet im Booter. „Bleibt im Booter" heißt
+aber **nicht defekt**: der Booter ist weiter über den Bus ansprechbar, du stößt das Update einfach
+erneut an (auch die alte `.hex` wieder — das ist dein Rollback). Und der Booter selbst wird über den
+Bus **nie** beschrieben (Adressen ≥ Boot-Section werden abgelehnt) → **ein Bus-Update kann nicht
+bricken**. Das einzige Brick-Fenster ist der einmalige ISP-Flash (falsche Fuses); mit `SPIEN`-an
+bleibt aber selbst der per ISP korrigierbar.
+
 ## Eigenes HBWired-Gerät bus-update-fähig machen
 
-Jede App, die per Bus updatebar sein soll, **muss auf `u` mit einem Watchdog-Reset reagieren**,
-sonst ist sie nach dem ersten Bus-Flash nur noch per ISP erreichbar.
+Damit ein Gerät per Bus updatebar ist, braucht es **den Booter in der Boot-Section** (einmalig per
+ISP, siehe [Benutzung](#1-einmalig-booter-per-isp-einspielen)) **und eine App, die auf das Kommando
+`u` mit einem Watchdog-Reset reagiert**. Fehlt der `u`-Handler, ist das Gerät nach dem ersten
+Bus-Flash nur noch per ISP erreichbar. Am Sketch-**Code** ändert sich dafür nichts — der Handler
+steckt in der Lib, aktiviert wird er über ein Compiler-Flag.
 
-- **Roher Sketch:** die Zeilen aus `hbw_testapp` übernehmen (`sendAck`; `Serial.flush()`;
-  `wdt_enable(WDTO_15MS)`; `while(1);`).
-- **HBWired-Lib:** `_HAS_BOOTLOADER_` per Build-Flag setzen und den `u`-Handler in
-  `HBWired.cpp` von `goto *bootloader_start` auf Watchdog-Reset umstellen:
-  ```cpp
-  case 'u':                                   // statt goto -> unser Booter erkennt WDRF
-     txFrame.targetAddress = senderAddress;   // hs485d WARTET auf dieses ACK, bevor es
-     sendAck();                               // den Booter akzeptiert -> erst ACK, dann Reset
-     wdt_enable(WDTO_15MS); while(1);
-  ```
-  Build z. B. per `arduino-cli compile --fqbn arduino:avr:uno
-  --build-property "build.extra_flags=-D_HAS_BOOTLOADER_" <sketch>`.
-  Die Änderung sitzt im `#if _HAS_BOOTLOADER_`-Block, betrifft also nur Geräte, die das Flag setzen.
+### 1. Der `u`-Handler in der HBWired-Lib
+
+Der Handler sitzt in `HBWired.cpp` hinter `#if defined(_HAS_BOOTLOADER_) && defined(BOOTSTART)`.
+Er muss **erst ein ACK senden, dann einen Watchdog-Reset auslösen**:
+
+```cpp
+case 'u':
+   txFrame.targetAddress = senderAddress;
+   sendAck();                    // die CCU/hs485d wartet auf dieses ACK, bevor sie den Booter akzeptiert
+   wdt_enable(WDTO_15MS);
+   while(1);
+```
+dazu oben in der Datei `#include <avr/wdt.h>`.
+
+**Warum Watchdog-Reset und nicht Sprung?** Der Booter entscheidet anhand der **Reset-Quelle**
+(`MCUSR`): Power-on → App starten, Watchdog (`WDRF`) → Update-Modus. Ein direkter Sprung ist kein
+Reset → kein `WDRF`, Peripherie nicht zurückgesetzt → der Booter startet einfach wieder die App.
+Und **ohne das ACK** bricht die CCU/hs485d mit „Gerät nicht erreichbar" ab.
+
+> **Fork-Unterschied:** Thorsten Pferdekämpers Original-`HBWired` (master) hat dort noch
+> `case 'u': goto *bootloader_start;` — ein direkter Sprung ohne Reset, **inkompatibel** mit diesem
+> Booter. Umbauen wie oben, oder den bereits angepassten Fork **[github.com/maxx3105/HBWired](https://github.com/maxx3105/HBWired)**
+> verwenden. Der loetmeister-Fork nutzt den Watchdog-Reset bereits.
+
+Wer keine HBWired-Lib verwendet (roher Sketch), übernimmt dieselben Zeilen aus `hbw_testapp/`.
+
+### 2. `_HAS_BOOTLOADER_` aktivieren — als **Build-Flag**, nicht als Sketch-`#define`
+
+**Stolperstein:** Ein `#define _HAS_BOOTLOADER_` **im Sketch** (`.ino`) wirkt **nicht** — `HBWired.cpp`
+wird als eigene Übersetzungseinheit kompiliert und sieht das Sketch-Makro nicht, der `#if`-Block
+bleibt inaktiv. Das Flag muss für **alle** Übersetzungseinheiten gelten:
+
+| Umgebung | So aktivieren |
+|----------|---------------|
+| **PlatformIO** | `build_flags = -D_HAS_BOOTLOADER_` in der `platformio.ini` |
+| **arduino-cli** | `--build-property compiler.cpp.extra_flags=-D_HAS_BOOTLOADER_` |
+| **Arduino IDE** | `build_opt.h` (Inhalt `-D_HAS_BOOTLOADER_`) in den Sketch-Ordner legen — **oder** in `hardware.h` das `//#define _HAS_BOOTLOADER_` einkommentieren (gilt dann Lib-weit) — **oder** das [Custom-Board](#arduino-ide-eigenes-board-mit-dem-hbw-booter) unten |
+
+`-D` ist die Compiler-Option „**D**efine" — wie ein `#define`, aber an jeden Compiler-Aufruf
+übergeben (also auch an `HBWired.cpp`). Der Wert ist egal; das Makro ist ein reiner Schalter.
+
+### 3. `BOOTSTART` und App-Größe
+
+- **`BOOTSTART`** muss ebenfalls definiert sein (das `#if` prüft beide). Für den 328P steht es in
+  `hardware.h` schon drin (`0x3800` = Word-Adresse = `0x7000` Byte). Für andere MCUs ergänzen:
+  644P `0x7800` (= `0xF000` Byte), 1284P `0xF800` (= `0x1F000` Byte). *(Der Wert wird nach dem Umbau
+  nur noch als Schalter gebraucht, nicht mehr angesprungen — muss aber gesetzt sein.)*
+- **App < Boot-Section:** Der Sketch muss unter `0x7000` (328P/32A) bzw. `0xF000`/`0x1F000`
+  (644P/1284P) passen — die obersten 4 KB gehören dem Booter. Die meisten HBWired-Apps liegen locker
+  drunter; bei großen Sketchen die Größe prüfen.
+
+Danach: Sketch bauen (mit dem Flag) → per Bus flashen. **Kein `#`-Eingriff am Sketch selbst.**
+
+## Arduino IDE: eigenes Board mit dem HBW-Booter
+
+Statt jedes Mal zu mergen, kann die IDE unseren Booter als **Bootloader eintragen**: dann brennt
+*Werkzeuge → Bootloader brennen* den HBW-Booter **plus die Fuses**, und `-D_HAS_BOOTLOADER_` ist
+beim Kompilieren automatisch dabei. Der Sketch kommt danach über den Bus (siehe unten), **nicht** per
+USB — der HBW-Booter ist ein Bus-Booter, kein serieller Optiboot.
+
+Dazu eine **`boards.local.txt`** in den AVR-Core legen
+(`…/packages/arduino/hardware/avr/<version>/boards.local.txt`):
+
+```properties
+hbwnano.name=HBWired-Nano (HBW-Booter)
+hbwnano.upload.tool=avrdude
+hbwnano.upload.protocol=arduino
+hbwnano.upload.maximum_size=28672
+hbwnano.bootloader.tool=avrdude
+hbwnano.bootloader.unlock_bits=0x3F
+hbwnano.bootloader.lock_bits=0x3F
+hbwnano.bootloader.low_fuses=0xFF
+hbwnano.bootloader.high_fuses=0xD8
+hbwnano.bootloader.extended_fuses=0xFD
+hbwnano.bootloader.file=hbw/hbw_booter_atmega328p.hex
+hbwnano.build.mcu=atmega328p
+hbwnano.build.f_cpu=16000000L
+hbwnano.build.board=AVR_NANO
+hbwnano.build.core=arduino
+hbwnano.build.variant=eightanaloginputs
+hbwnano.build.extra_flags=-D_HAS_BOOTLOADER_
+```
+und `hbw_booter_atmega328p.hex` nach `<core>/bootloaders/hbw/` kopieren.
+
+**Ablauf:** IDE neu starten → Board **„HBWired-Nano (HBW-Booter)"** + Programmer (z. B. USBasp)
+wählen → **Bootloader brennen** (Booter + Fuses, einmalig per ISP) → Sketch → *Kompilierte
+Binärdatei exportieren* → die `.ino.hex` über das Gateway (`/flash`) flashen.
+
+> ⚠ `boards.local.txt` liegt im Core-Ordner und geht bei einem **Core-Update verloren** — dann neu
+> anlegen. Update-sicher ist ein eigener `Documents/Arduino/hardware/…`-Ordner (braucht dann aber eine
+> eigene `platform.txt`). Für andere MCUs (32A/644P/1284P) analoge Einträge; 644P/1284P laufen über
+> MightyCore.
 
 ## CCU-Update über die native hs485d
 
