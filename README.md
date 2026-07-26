@@ -19,16 +19,6 @@ bleiben bewusst unvollständig (Boot-Section-Kollision, siehe unten).
 
 ---
 
-## Hintergrund
-
-- **eq3-Original-Geräte können es (mit ihrer Firmware) nicht:** Die Disassembly der Original-
-  Firmware `hmw_sen_sc_12_dr_hw0.hex` (v3.01, ATmega32A) zeigt: kein `u`/START_BOOTER-Handler,
-  kein Watchdog-Reset, kein Sprung in die Boot-Section. Die App kann schlicht nicht in einen
-  Bootloader wechseln → Over-the-Bus-Update ist mit dieser Firmware unmöglich (unabhängig von
-  Gateway/CCU).
-- **Eigene HBWired-Geräte können es:** Sie brauchen (a) diesen Booter in der Boot-Section und
-  (b) einen `u`-Handler in der App, der einen Watchdog-Reset auslöst.
-
 ## Funktionsprinzip
 
 Der Einstieg in den Booter hängt an der **Reset-Quelle**, nicht an einem Timing-Fenster:
