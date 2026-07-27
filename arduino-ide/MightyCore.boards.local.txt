@@ -26,7 +26,14 @@
 #   * 32A high=0xC0 hat CKOPT=0 (Full-Swing) -- PFLICHT fuer 16 MHz. Der frueher genannte
 #     0x98 (CKOPT=1) ist nur bis ~8 MHz zuverlaessig -> 16-MHz-Quarz schwingt evtl. nicht an.
 #   * EESAVE=keep (Busadresse im EEPROM ueberlebt das Brennen), JTAG aus (PC2-PC5 frei),
-#     BOOTRST an + BOOTSZ=2048 W (4 KB Boot). ATmega32A hat KEIN extended-fuse.
+#     BOOTRST an + Boot-Section 2048 Words (4 KB). ATmega32A hat KEIN extended-fuse.
+#   * !! BOOTSZ-BITS SIND CHIP-ABHAENGIG !! 4 KB Boot heisst NICHT ueberall BOOTSZ=00:
+#       32A   (Datenblatt Tab. 26-6): BOOTSZ=00 = 2048 W = MAXIMUM  -> Boot @Word 0x3800 = Byte 0x7000
+#       644P  (Tab. 27-7):            BOOTSZ=01 = 2048 W            -> Boot @Word 0x7800 = Byte 0xF000
+#       1284P (Tab. 26-16):           BOOTSZ=01 = 2048 W            -> Boot @Word 0xF800 = Byte 0x1F000
+#     Bei 644P/1284P waere BOOTSZ=00 = 4096 W = 8 KB @0xE000/0x1E000 -> der Reset spraenge VOR
+#     unseren Booter (@0xF000/0x1F000) in leeren Flash = Geraet startet nicht. Darum high=0xD2
+#     (BOOTSZ=01), NICHT 0xD0. Beim 32A ist 0xC0 (BOOTSZ=00) korrekt.
 #   * Anderer Takt als 16 MHz? Dann low_fuses (und beim 32A das high-CKOPT-Bit) anpassen!
 #
 #  Ein Booter je MCU gilt fuer ALLE HBW-Geraete des Typs (Adresse kommt aus dem EEPROM).
@@ -65,7 +72,7 @@ hbw644.bootloader.tool.default=avrdude
 hbw644.bootloader.unlock_bits=0xFF
 hbw644.bootloader.lock_bits=0xFF
 hbw644.bootloader.low_fuses=0xF7
-hbw644.bootloader.high_fuses=0xD0
+hbw644.bootloader.high_fuses=0xD2
 hbw644.bootloader.extended_fuses=0xFD
 hbw644.bootloader.file=hbw/hbw_booter_atmega644p.hex
 hbw644.build.mcu=atmega644p
@@ -87,7 +94,7 @@ hbw1284.bootloader.tool.default=avrdude
 hbw1284.bootloader.unlock_bits=0xFF
 hbw1284.bootloader.lock_bits=0xFF
 hbw1284.bootloader.low_fuses=0xF7
-hbw1284.bootloader.high_fuses=0xD0
+hbw1284.bootloader.high_fuses=0xD2
 hbw1284.bootloader.extended_fuses=0xFD
 hbw1284.bootloader.file=hbw/hbw_booter_atmega1284p.hex
 hbw1284.build.mcu=atmega1284p

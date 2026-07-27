@@ -103,27 +103,40 @@ Mit **AVRDUDESS** oder `avrdude` (nicht die Arduino-IDE — die brennt ihren eig
 ```sh
 # 328P (Nano/Uno, Entwicklung): SPIEN bleibt an -> nichts brickbar
 avrdude -c usbasp -p m328p  -U flash:w:hbw_combined_328p.hex:i  -U hfuse:w:0xD8:m
-# 32A / 1284P (Produktivgeraete): NUR hfuse setzen, lfuse (Oszillator) NICHT anfassen
-avrdude -c usbasp -p m1284p -U flash:w:hbw_combined_1284p.hex:i -U hfuse:w:0x90:m
+# 1284P (Produktivgeraet): hfuse 0xD2 = BOOTSZ 01 (4 KB Boot @0x1F000!) + EESAVE; lfuse = Takt
+avrdude -c usbasp -p m1284p -U flash:w:hbw_combined_1284p.hex:i -U hfuse:w:0xD2:m
+# 32A: hfuse 0xC0 -- enthaelt CKOPT=0 (Full-Swing, PFLICHT fuer 16-MHz-Quarz), kein efuse
+avrdude -c usbasp -p m32    -U flash:w:hbw_combined_32.hex:i    -U hfuse:w:0xC0:m
 ```
 
 **Fuses je MCU** — bei allen: *BOOTRST aktiv + BOOTSZ = 2048 Words (4 KB Boot)*, `SPIEN` bleibt an
 → ISP immer möglich.
 
-| MCU | `-p` | `hfuse` Standard | `hfuse` +EESAVE | übrige Fuses |
-|-----|------|:----------------:|:---------------:|--------------|
-| ATmega328P | `m328p` | **0xD8** | 0xD0 | `lfuse=0xFF`, `efuse=0xFD` unverändert |
-| ATmega328PB | `m328pb` | **0xD8** | 0xD0 | wie 328P; **Signatur `0x1E 95 16`**, braucht **avrdude ≥ 7.0** |
-| ATmega32A | `m32` | **0x98** | 0x90 | **`lfuse` unverändert** (CKSEL/CKOPT = Oszillator) |
-| ATmega644P/644PA | `m644p` | **0x98** | 0x90 | **`lfuse`/`efuse` unverändert** (CKSEL/SUT = Oszillator) |
-| ATmega1284P | `m1284p` | **0x98** | 0x90 | **`lfuse`/`efuse` unverändert** (CKSEL/SUT = Oszillator) |
+| MCU | `-p` | `hfuse` Standard | `hfuse` +EESAVE | BOOTSZ | übrige Fuses |
+|-----|------|:----------------:|:---------------:|:------:|--------------|
+| ATmega328P | `m328p` | **0xD8** | 0xD0 | `00` | `lfuse=0xFF`, `efuse=0xFD` unverändert |
+| ATmega328PB | `m328pb` | **0xD8** | 0xD0 | `00` | wie 328P; **Signatur `0x1E 95 16`**, braucht **avrdude ≥ 7.0** |
+| ATmega32A | `m32` | **0xC8** | 0xC0 | `00` | `lfuse` = Takt (CKSEL/SUT); **kein `efuse`** |
+| ATmega644P/644PA | `m644p` | **0xDA** | 0xD2 | **`01`** | `lfuse`/`efuse` = Takt/BOD |
+| ATmega1284P | `m1284p` | **0xDA** | 0xD2 | **`01`** | `lfuse`/`efuse` = Takt/BOD |
 
-Bei 32A, 644P **und** 1284P hat der Default (`hfuse=0x99`) `BOOTSZ=2048` (Bit 2:1 = 00) **schon gesetzt** —
-es ist nur `BOOTRST` (Bit 0) auf 0 zu ziehen (→ `0x98`), optional zusätzlich `EESAVE` (Bit 3, → `0x90`),
-damit die Bus-Adresse im EEPROM einen Flash überlebt (**für echte Geräte empfohlen**). Beim 1284P liegt
-die Boot-Section dann bei `0x1F000`, beim 644P bei `0xF000`, beim 32A/328P bei `0x7000` — der Booter wird pro MCU passend
-gelinkt (`build.sh`). *(Die `hbw_combined_1284p.hex` entsteht wie beim 328P per Merge:
-App-`.hex` unter `0x10000` + `hbw_booter_atmega1284p.hex` ab `0x1F000`.)*
+> **⚠ `BOOTSZ` ist chip-abhängig — 4 KB Boot heißt *nicht* überall `BOOTSZ=00`.** Die Boot-Section ist
+> bei uns immer **2048 Words = 4 KB**, aber die Fuse-Kodierung dafür unterscheidet sich (Datenblätter:
+> 32A Tab. 26-6, 644P Tab. 27-7, 1284/1284P Tab. 26-16 — dort sind die Adressen **Word**-Adressen):
+>
+> | MCU | `BOOTSZ=00` | `BOOTSZ=01` | wir brauchen |
+> |---|---|---|---|
+> | 32A / 328P / 328PB | **2048 W** (Maximum) → Byte `0x7000` | 1024 W → `0x7800` | **`00`** |
+> | 644P | 4096 W → Byte `0xE000` | **2048 W** → Byte `0xF000` | **`01`** |
+> | 1284P | 4096 W → Byte `0x1E000` | **2048 W** → Byte `0x1F000` | **`01`** |
+>
+> Bei 32 KB Flash sind 4 KB die **größte** wählbare Boot-Section (`00`); bei 644P/1284P ist `00`
+> bereits **8 KB**. Mit `BOOTSZ=00` auf einem 644P/1284P zeigt der Boot-Reset auf `0xE000`/`0x1E000` —
+> **vor** unseren Booter (`0xF000`/`0x1F000`), also in leeren Flash: Das Gerät startet nach dem Reset
+> gar nicht. (Frühere README-Fassungen empfahlen hier `0x98`/`0x90` = `BOOTSZ=00` — **falsch**.)
+
+*(Die `hbw_combined_1284p.hex` entsteht wie beim 328P per Merge: App-`.hex` unter `0x10000` +
+`hbw_booter_atmega1284p.hex` ab `0x1F000`.)*
 
 Der **ATmega328PB** ist ein **eigener** Chip (Signatur `0x1E 95 16`, Extras USART1/SPI1/TWI1/PORTE),
 für den Booter aber 328P-kompatibel: `USART0`/`MCUSR`/`TIFR1` liegen an denselben Adressen,
@@ -133,10 +146,19 @@ für den Booter aber 328P-kompatibel: `USART0`/`MCUSR`/`TIFR1` liegen an denselb
 MiniCore hat es; eine ältere AVRDUDESS ggf. aktualisieren (oder per `-C` auf die 8.0er-`avrdude.conf` zeigen).
 Die Extra-Peripherie (USART1 usw.) rührt der Booter nicht an.
 
-> **⚠ 32A/1284P nicht brickbar halten:** Anders als beim 328P steckt der Oszillator hier im `lfuse`.
-> Vorher auslesen — `avrdude -c usbasp -p m1284p -U hfuse:r:-:h -U lfuse:r:-:h` — und **nur** das
-> BOOTRST-Bit im `hfuse` ändern. Ein falscher `lfuse` (Taktquelle) macht den Chip nur noch mit
-> externem Takt oder HV-Programmer erreichbar.
+> **⚠ Takt-Fuses: vorher auslesen, nicht raten.** Bei 32A/644P/1284P steckt die Taktquelle (CKSEL/SUT)
+> im `lfuse`. Ein falscher `lfuse` macht den Chip nur noch mit externem Takt oder HV-Programmer
+> erreichbar. Also erst lesen —
+> `avrdude -c usbasp -p m1284p -U hfuse:r:-:h -U lfuse:r:-:h -U efuse:r:-:h` — und den vorhandenen
+> `lfuse` beibehalten, wenn das Gerät schon läuft.
+>
+> **⚠ Beim ATmega32A geht das aber *nicht* „nur hfuse anfassen":** dort sitzt **`CKOPT` im `hfuse`
+> (Bit 4)** — nicht im `lfuse` wie bei den anderen. Für einen **16-MHz-Quarz muss `CKOPT=0`**
+> (Full-Swing) sein; mit `CKOPT=1` ist der Oszillator nur bis ~8 MHz spezifiziert und der Quarz
+> schwingt u. U. gar nicht an. Deshalb `0xC8`/`0xC0` (CKOPT=0) statt der früher genannten
+> `0x98`/`0x90` (CKOPT=1). **Bestätigt am Original:** ein eq3 **HMW-Sen-SC-12-FM** (ATmega32A) hat
+> `lfuse=0x3F`, `hfuse=0xCA`, `lock=0xEC` — also ebenfalls **CKOPT=0** und JTAG aus (`0xCA` =
+> BOOTSZ `01` = 1 KB Boot für den kleineren eq3-Booter, BOD an @4,0 V, `lock=0xEC` = ausgelesen-gesperrt).
 
 ### Ein Booter je MCU — universell
 
@@ -420,7 +442,8 @@ arduino-cli compile \
 python merge_hex.py out/hbw_testapp_1284p.ino.hex hbw_booter_atmega1284p.hex hbw_combined_1284p.hex
 ```
 
-Dann `hbw_combined_1284p.hex` per ISP einspielen (`-p m1284p`, `hfuse=0x90`, **`lfuse` unverändert**)
+Dann `hbw_combined_1284p.hex` per ISP einspielen (`-p m1284p`, **`hfuse=0xD2`** = `BOOTSZ 01` → 4 KB
+Boot `@0x1F000`, **`lfuse` unverändert**)
 und über USB testen: `python booter_test.py COMx` (Einstieg) bzw. `python flash_tool.py COMx
 hbw_testapp_1284p.hex` (voller Flash-Durchlauf). Für ein echtes Gerät die Test-App durch deine
 Geräte-Firmware (`.hex` < `0x10000`, mit `u`→Watchdog-Reset-Handler) ersetzen — `DEVICE_TYPE` muss
