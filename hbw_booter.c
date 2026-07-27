@@ -33,7 +33,10 @@
 #endif
 #define BUS_BAUD     19200UL
 
-#define DEVICE_TYPE  0x10            /* Modultyp (wird bei 'h' gemeldet) */
+#define DEVICE_TYPE  0x00            /* NEUTRAL -- der Booter ist geraeteunabhaengig (ein Booter je MCU
+                                        gilt fuer ALLE HBW-Geraete des Typs). Wird nur gemeldet, wenn ein
+                                        Geraet OHNE laufende App abgefragt wird; die App meldet sonst ihren
+                                        eigenen Typ. Fuers Flashen (Adresse kommt aus dem EEPROM) egal. */
 #define HW_VERSION   0x00
 #define FW_VERSION   0x0001          /* Booter-eigene Version, gemeldet bei 'v' */
 #define FALLBACK_ADDR 0x42FFFFFFUL   /* falls EEPROM-Adresse leer (0xFFFFFFFF) */
@@ -52,13 +55,15 @@
 #define USE_DE   1
 
 /* ======================= Chip-Portabilitaet ======================= */
-#if defined(__AVR_ATmega328P__) || defined(__AVR_ATmega328__) \
+#if defined(__AVR_ATmega328P__) || defined(__AVR_ATmega328PA__) || defined(__AVR_ATmega328__) \
  || defined(__AVR_ATmega644P__)  || defined(__AVR_ATmega644PA__) \
  || defined(__AVR_ATmega644__)   || defined(__AVR_ATmega644A__) \
  || defined(__AVR_ATmega1284P__) || defined(__AVR_ATmega1284__)
-  /* 328P / 644P(A) / 1284P sind registergleich (UART0, MCUSR, TIFR1). Nur der 1284P hat
+  /* 328P(A) / 644P(A) / 1284P sind registergleich (UART0, MCUSR, TIFR1). Nur der 1284P hat
      zusaetzlich RAMPZ (in main() auf 0) -- 644P/328P haben <=64 KB Flash, kein RAMPZ. Die
-     Boot-Section-Adresse (BOOT_START) folgt generisch aus FLASHEND. */
+     Boot-Section-Adresse (BOOT_START) folgt generisch aus FLASHEND. Der 328PA ist eine
+     picoPower-Rev des 328P (register- UND signaturgleich): avr-gcc hat KEIN eigenes Target,
+     er wird als atmega328p gebaut -- dieses Makro greift nur, falls eine Toolchain es setzt. */
   #define RESET_FLAGS  MCUSR
   #define U_UCSRA UCSR0A
   #define U_UCSRB UCSR0B
@@ -85,7 +90,7 @@
   #define UART_INIT_C()  (UCSRC = (1<<URSEL)|(1<<UPM1)|(1<<UCSZ1)|(1<<UCSZ0))
   #define T1_IFR  TIFR               /* 32A: ein gemeinsames Timer-Interrupt-Flag-Register */
 #else
-  #error "Nicht unterstuetzte MCU (nur ATmega32A / ATmega328P)"
+  #error "Nicht unterstuetzte MCU (nur ATmega32A / ATmega328P(A) / ATmega644P(A) / ATmega1284P)"
 #endif
 
 /* ======================= Frame-Konstanten ======================= */
@@ -330,9 +335,12 @@ static void handleFrame(uint32_t target, uint8_t control, uint32_t sender,
       pageBase=0xFFFF; pageDirty=0; flashStarted=0;   /* Page-Puffer + Flash-Zustand zuruecksetzen */
       uint8_t r[2]={0x00,MAX_PACKET_SIZE};            /* Blockgroesse als 2-Byte-BIG-ENDIAN, wie hs485d es liest */
       sendBootReply(sender,r,2); break; }
-    case CMD_GET_FW:{ uint8_t r[3]={cmd,(FW_VERSION>>8)&0xFF,FW_VERSION&0xFF}; sendInfo(sender,r,3); break; }
-    case CMD_GET_HW:{ uint8_t r[2]={cmd,HW_VERSION}; sendInfo(sender,r,2); break; }
-    case CMD_GET_SERIAL:{ uint8_t r[11]; r[0]=cmd; makeSerial(ownAddr,&r[1]); sendInfo(sender,r,11); break; }
+    /* h/v/n im APP-Format beantworten (OHNE cmd-Echo im 1. Byte) -- so liest CCU/Gateway die Werte wie
+       bei der laufenden App: h=[Typ,HW], v=[FWhi,FWlo], n=[Serial(10)]. Greift nur im reinen Booter-
+       Zustand (ohne App); mit DEVICE_TYPE=0x00 taucht so ein Geraet neutral auf, nicht als Fremdtyp. */
+    case CMD_GET_FW:{ uint8_t r[2]={(FW_VERSION>>8)&0xFF,FW_VERSION&0xFF}; sendInfo(sender,r,2); break; }
+    case CMD_GET_HW:{ uint8_t r[2]={DEVICE_TYPE,HW_VERSION}; sendInfo(sender,r,2); break; }
+    case CMD_GET_SERIAL:{ uint8_t r[10]; makeSerial(ownAddr,r); sendInfo(sender,r,10); break; }
     case CMD_WRITE_FLASH:{             /* 'w' [addrHi addrLo len data..] -> App-Section flashen */
       if(dlen>=4){
         uint16_t addr=((uint16_t)data[1]<<8)|data[2];

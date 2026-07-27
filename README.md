@@ -1,6 +1,6 @@
 # HBW-Booter — Over-the-Bus-Firmware-Update für HMW/HBWired-Geräte
 
-Eigener Bootloader für **ATmega328P, ATmega32A, ATmega644P/644PA und ATmega1284P**, mit dem sich
+Eigener Bootloader für **ATmega328P/PA, ATmega32A, ATmega644P/644PA und ATmega1284P**, mit dem sich
 HomeMatic-Wired-Eigenbau-Geräte (HBWired) **über den RS485-Bus flashen** lassen — ohne ISP, ohne
 Ausbau. Der Booter wird **einmalig** per ISP eingespielt; danach läuft jedes weitere Firmware-Update
 über die Leitung (per `flash_tool.py`, über das [HMW-Gateway](https://github.com/maxx3105/HMW-Gateway-Pro)
@@ -108,7 +108,7 @@ avrdude -c usbasp -p m1284p -U flash:w:hbw_combined_1284p.hex:i -U hfuse:w:0x90:
 
 | MCU | `-p` | `hfuse` Standard | `hfuse` +EESAVE | übrige Fuses |
 |-----|------|:----------------:|:---------------:|--------------|
-| ATmega328P | `m328p` | **0xD8** | 0xD0 | `lfuse=0xFF`, `efuse=0xFD` unverändert |
+| ATmega328P/PA | `m328p` | **0xD8** | 0xD0 | `lfuse=0xFF`, `efuse=0xFD` unverändert |
 | ATmega32A | `m32` | **0x98** | 0x90 | **`lfuse` unverändert** (CKSEL/CKOPT = Oszillator) |
 | ATmega644P/644PA | `m644p` | **0x98** | 0x90 | **`lfuse`/`efuse` unverändert** (CKSEL/SUT = Oszillator) |
 | ATmega1284P | `m1284p` | **0x98** | 0x90 | **`lfuse`/`efuse` unverändert** (CKSEL/SUT = Oszillator) |
@@ -120,10 +120,26 @@ die Boot-Section dann bei `0x1F000`, beim 644P bei `0xF000`, beim 32A/328P bei `
 gelinkt (`build.sh`). *(Die `hbw_combined_1284p.hex` entsteht wie beim 328P per Merge:
 App-`.hex` unter `0x10000` + `hbw_booter_atmega1284p.hex` ab `0x1F000`.)*
 
+Der **ATmega328PA** wird überall wie ein 328P behandelt: `-p m328p`, Signatur `0x1E 0x95 0x0F`,
+dieselben Fuses und dieselbe `hbw_combined_328p.hex` — avr-gcc und avrdude führen kein eigenes
+`328pa`-Target (nur der **328PB** weicht ab, Signatur `0x1E 0x95 0x16`, eigenes Target). Sollte
+avrdude beim ISP wider Erwarten einen Signatur-Mismatch melden, mit `-F` überschreiben.
+
 > **⚠ 32A/1284P nicht brickbar halten:** Anders als beim 328P steckt der Oszillator hier im `lfuse`.
 > Vorher auslesen — `avrdude -c usbasp -p m1284p -U hfuse:r:-:h -U lfuse:r:-:h` — und **nur** das
 > BOOTRST-Bit im `hfuse` ändern. Ein falscher `lfuse` (Taktquelle) macht den Chip nur noch mit
 > externem Takt oder HV-Programmer erreichbar.
+
+### Ein Booter je MCU — universell
+
+Der Booter ist **geräteunabhängig**: Es gibt genau **einen** Build je MCU-Typ (328P, 32A, 644P, 1284P),
+und der gilt für **alle** HBW-Geräte dieses Typs — egal ob IO-4-FM, Sen-SC-12-FM, IO-12-FM … Kein
+eigener Booter pro Gerätetyp. Der Grund: Die einzige gerätespezifische Größe, die **Busadresse**, liest
+der Booter zur Laufzeit aus dem EEPROM (`E2END-3`); die Flash-Choreografie (`z/u/p/w/r/g`) fragt **keinen**
+Gerätetyp ab, sie arbeitet rein über diese Adresse. `DEVICE_TYPE`/`FW_VERSION` im Konfigblock stehen
+deshalb neutral auf `0x00`/`0x0001` und werden nur gemeldet, wenn ein Gerät **ohne** laufende App
+abgefragt wird (frisch gebrannt / nach Update-Abbruch) — im Normalbetrieb meldet die App ohnehin ihren
+eigenen Typ. Du musst diese Werte **nicht** pro Gerät anpassen.
 
 ### 2. Ab jetzt: über den Bus flashen — kein ISP mehr
 
@@ -292,6 +308,13 @@ und `hbw_booter_atmega328p.hex` nach `<core>/bootloaders/hbw/` kopieren.
 wählen → **Bootloader brennen** (Booter + Fuses, einmalig per ISP) → Sketch → *Kompilierte
 Binärdatei exportieren* → die `.ino.hex` über das Gateway (`/flash`) flashen.
 
+> ⚠ **Nach dem Bootloader-Brennen nicht mehr per ISP flashen.** *„Hochladen mit Programmer"* macht
+> einen **Chip-Erase** und löscht den Booter gleich wieder — das Bus-Update bleibt danach bei
+> `kein ACK` hängen, und das Gerät meldet nach `u` weiter die **App-Version statt der Booter-Version**
+> (Zeichen, dass der Booter nach dem Reset gar nicht übernimmt). Merksatz: **„Bootloader brennen" ist
+> der letzte ISP-Schritt**, der Sketch kommt danach ausschließlich über `/flash` (Bus). Umgekehrt hilft
+> im Zweifel: erst den Sketch per ISP, dann *zuletzt* den Bootloader brennen.
+
 > ⚠ `boards.local.txt` liegt im Core-Ordner und geht bei einem **Core-Update verloren** — dann neu
 > anlegen. Update-sicher ist ein eigener `Documents/Arduino/hardware/…`-Ordner (braucht dann aber eine
 > eigene `platform.txt`). Für andere MCUs (32A/644P/1284P) analoge Einträge; 644P/1284P laufen über
@@ -365,8 +388,8 @@ python merge_hex.py out/hbw_testapp_1284p.ino.hex hbw_booter_atmega1284p.hex hbw
 Dann `hbw_combined_1284p.hex` per ISP einspielen (`-p m1284p`, `hfuse=0x90`, **`lfuse` unverändert**)
 und über USB testen: `python booter_test.py COMx` (Einstieg) bzw. `python flash_tool.py COMx
 hbw_testapp_1284p.hex` (voller Flash-Durchlauf). Für ein echtes Gerät die Test-App durch deine
-Geräte-Firmware (`.hex` < `0x10000`, mit `u`→Watchdog-Reset-Handler) ersetzen und `DEVICE_TYPE` im
-Booter-Konfigblock auf den Modultyp setzen.
+Geräte-Firmware (`.hex` < `0x10000`, mit `u`→Watchdog-Reset-Handler) ersetzen — `DEVICE_TYPE` muss
+**nicht** angepasst werden, der Booter ist geräteunabhängig (siehe [Ein Booter je MCU](#ein-booter-je-mcu--universell)).
 
 ## Status & Roadmap
 
@@ -380,6 +403,7 @@ Booter-Konfigblock auf den Modultyp setzen.
 | CCU spricht Booter an (`u`/`p`/`g`), quittiert Antworten | ✅ (Gateway-Log: `p`-Antwort akzeptiert) |
 | **CCU-Update vollständig, eigene App läuft danach** | ✅ **HW-verifiziert** — HBW-IO-4-FM **v3.04** über WebUI geflasht, Gerät bootet + meldet Announce FW `0x0304` |
 | **WebUI meldet „Firmware-Update erfolgreich"** | ✅ **HW-verifiziert** (Screenshot + Log) — `r`-Verify komplett inkl. Versionsfeld `@0x6FF0`, danach `h`/`v` → FW `3.04` |
+| ATmega328PA (picoPower-Rev von 328P) | ✅ abgedeckt vom **328P-Binary** — register-/signaturgleich, kein eigener Build/HW-Test nötig |
 | ATmega32A (Code portabel, `hfuse` dokumentiert) | ✅ kompiliert (2646 B) · ⏳ HW-Test am echten RS485 offen |
 | ATmega644P/644PA (Boot @0xF000, 64 KB = ganzer Flash adressierbar) | ✅ portiert + kompiliert (2732 B) · ⏳ HW-Test offen |
 | ATmega1284P, App < 64 KB (Boot @0x1F000, `RAMPZ=0`) | ✅ portiert + kompiliert (2770 B) · ⏳ HW-Test offen |
