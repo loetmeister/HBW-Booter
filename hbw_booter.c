@@ -48,11 +48,45 @@
    Update faelschlich abbricht (waehrend des Flashs ist die App ohnehin ungueltig). */
 #define IDLE_TIMEOUT_OVF 6
 
-/* RS485 Sende-Enable (DE). -1 = Auto-Direction-Modul (kein DE-Pin). */
+/* RS485 Sende-Enable (DE) -- MUSS zum Pin der Platine passen!
+ * Stimmt der Pin NICHT, ist der Fehler heimtueckisch: der Booter EMPFAENGT normal (RX lauscht
+ * passiv), kann aber NIE senden, weil der Transceiver auf Empfang stehen bleibt. Das Geraet ist
+ * dann am Bus komplett unsichtbar (Discovery findet 0 Geraete), waehrend die App -- die den
+ * richtigen Pin benutzt -- voellig normal antwortet. Symptom beim Update: die App quittiert das
+ * 'u' noch, danach kommt auf p/w nie ein ACK ("kein ACK @<erste Blockadresse>").
+ * Abgleich mit dem Sketch: dessen RS485_TXEN muss denselben Portpin meinen.
+ *   328P/328PB : Arduino-Pin 2  = PD2   (manche Platinen Pin 3 = PD3 -> hier anpassen!)
+ *   32A/644P/1284P: Arduino-Pin 12 = PD4 (MightyCore-Standard-Pinout)
+ * USE_DE 0 = Auto-Direction-Modul ohne DE-Pin. */
 #define DE_DDR   DDRD
 #define DE_PORT  PORTD
-#define DE_BIT   2                   /* PD2; auf -1-Verhalten via USE_DE=0 stellen */
+#if defined(__AVR_ATmega328P__) || defined(__AVR_ATmega328PB__) || defined(__AVR_ATmega328__)
+  #define DE_BIT 2                   /* PD2 */
+#else
+  #define DE_BIT 4                   /* PD4 -- 32A / 644P / 1284P (MightyCore) */
+#endif
 #define USE_DE   1
+
+/* Status-LED: zeigt an, dass der BOOTER laeuft (die App blinkt so nie) -- damit sieht man von
+ * aussen sofort, ob ein Geraet im Update-Modus haengt, statt es am Bus suchen zu muessen.
+ *   wartend        : kurzer Blitz ~1x/s   ("Booter aktiv, kein Update im Gang")
+ *   Update laeuft  : schnelles Blinken    (ab dem ersten 'w'/'r' -- Daten fliessen)
+ * Muss wie DE zum Pin der Platine passen (Abgleich mit LED im Sketch-Config):
+ *   328P/328PB     : PB5 = Arduino D13 (LED_BUILTIN)
+ *   32A/644P/1284P : PD2 = Arduino-Pin 10 (MightyCore-Standard)
+ * Aktiv HIGH wie in HBWired (digitalWrite(ledPin,HIGH) = an); bei Low-Side-LED auf 1 setzen.
+ * USE_LED 0 = LED-Ansteuerung komplett aus (z.B. wenn der Pin anders belegt ist). */
+#define USE_LED         1
+#define LED_ACTIVE_LOW  0
+#if defined(__AVR_ATmega328P__) || defined(__AVR_ATmega328PB__) || defined(__AVR_ATmega328__)
+  #define LED_DDR  DDRB
+  #define LED_PORT PORTB
+  #define LED_BIT  5                 /* PB5 */
+#else
+  #define LED_DDR  DDRD
+  #define LED_PORT PORTD
+  #define LED_BIT  2                 /* PD2 */
+#endif
 
 /* ======================= Chip-Portabilitaet ======================= */
 #if defined(__AVR_ATmega328P__) || defined(__AVR_ATmega328PB__) || defined(__AVR_ATmega328__) \
@@ -221,17 +255,22 @@ static uint8_t  inFrame=0, pendingEsc=0;
 static uint16_t rxCrc=0xFFFF;
 static void rxReset(void){ inFrame=0; pendingEsc=0; rxIdx=0; rxTotal=-1; rxHeaderLen=0; }
 
-static uint8_t pollFrame(uint32_t* target, uint8_t* control, uint32_t* sender,
-                         uint8_t** data, uint8_t* dlen){
-  int16_t v;
-  while((v=uartGet())>=0){
-    uint8_t b=(uint8_t)v;
+/* Fertig empfangenes, CRC-geprueftes Frame (von rxByte gefuellt, von pollFrame ausgeliefert).
+   Eigene Variablen statt Rueckgabe-Pointer, weil ein Frame auch WAEHREND einer Flash-Operation
+   fertig werden kann (rxPump aus spmWait heraus) und dann bis zur Auswertung liegenbleiben muss. */
+static uint8_t  frameReady=0;
+static uint32_t fTarget, fSender;
+static uint8_t  fControl, *fData, fDlen;
+
+/* Ein einzelnes Byte in die Statemaschine schieben. 1 = komplettes gueltiges Frame liegt vor. */
+static uint8_t rxByte(uint8_t b){
+  {
     if(b==FRAME_START || b==FRAME_START_SHORT){
       inFrame=1; pendingEsc=0; rxIdx=0; rxTotal=-1; rxHeaderLen=0;
-      rxCrc=0xFFFF; crc16Shift(b,&rxCrc); continue;
+      rxCrc=0xFFFF; crc16Shift(b,&rxCrc); return 0;
     }
-    if(!inFrame) continue;
-    if(b==ESCAPE_BYTE){ pendingEsc=1; continue; }
+    if(!inFrame) return 0;
+    if(b==ESCAPE_BYTE){ pendingEsc=1; return 0; }
     if(pendingEsc){ b|=0x80; pendingEsc=0; }
     crc16Shift(b,&rxCrc);
     if(rxIdx<RX_BUFSIZE) rxb[rxIdx]=b;
@@ -249,12 +288,12 @@ static uint8_t pollFrame(uint32_t* target, uint8_t* control, uint32_t* sender,
     rxIdx++;
     if(rxTotal>0 && rxIdx==rxTotal){
       if(rxCrc!=0){ rxReset(); return 0; }
-      *target=((uint32_t)rxb[0]<<24)|((uint32_t)rxb[1]<<16)|((uint32_t)rxb[2]<<8)|rxb[3];
-      *control=rxb[4];
-      *sender = rxHasSender ? (((uint32_t)rxb[5]<<24)|((uint32_t)rxb[6]<<16)|((uint32_t)rxb[7]<<8)|rxb[8]) : 0;
+      fTarget=((uint32_t)rxb[0]<<24)|((uint32_t)rxb[1]<<16)|((uint32_t)rxb[2]<<8)|rxb[3];
+      fControl=rxb[4];
+      fSender = rxHasSender ? (((uint32_t)rxb[5]<<24)|((uint32_t)rxb[6]<<16)|((uint32_t)rxb[7]<<8)|rxb[8]) : 0;
       uint8_t wireLen=rxb[rxHeaderLen-1];
-      *dlen=(wireLen>=2)?wireLen-2:0;
-      *data=&rxb[rxHeaderLen];
+      fDlen=(wireLen>=2)?wireLen-2:0;
+      fData=&rxb[rxHeaderLen];
       rxReset(); return 1;
     }
     if(rxIdx>=RX_BUFSIZE) rxReset();
@@ -262,8 +301,54 @@ static uint8_t pollFrame(uint32_t* target, uint8_t* control, uint32_t* sender,
   return 0;
 }
 
+/* UART leerraeumen, solange Bytes da sind. Stoppt, sobald ein Frame fertig ist -- sonst wuerden
+   nachfolgende Bytes rxb ueberschreiben, auf das fData noch zeigt. Wird AUCH aus spmWait()
+   heraus aufgerufen: waehrend boot_page_erase/_write (~4,5-9 ms) liefe der 2-Byte-UART-Puffer
+   sonst ueber und der naechste Block ginge verloren (Ursache des Abbruchs an der Page-Grenze). */
+static void rxPump(void){
+  int16_t v;
+  while(!frameReady && (v=uartGet())>=0){
+    if(rxByte((uint8_t)v)) frameReady=1;
+  }
+}
+
+/* Warten auf das Ende einer SPM-Operation -- dabei WEITER die UART bedienen.
+   Zulaessig, weil der Booter in der NRWW-Section liegt: die CPU laeuft waehrend eines
+   Schreibvorgangs in die RWW-(App-)Section normal weiter, und rxByte arbeitet nur auf RAM. */
+static void spmWait(void){
+  while(boot_spm_busy()) rxPump();
+}
+
+static uint8_t pollFrame(uint32_t* target, uint8_t* control, uint32_t* sender,
+                         uint8_t** data, uint8_t* dlen){
+  rxPump();
+  if(!frameReady) return 0;
+  frameReady=0;
+  *target=fTarget; *control=fControl; *sender=fSender; *data=fData; *dlen=fDlen;
+  return 1;
+}
+
+/* ======================= Status-LED ======================= */
+static void ledInit(void){
+#if USE_LED
+  LED_DDR |= (1<<LED_BIT);
+#endif
+}
+static void ledSet(uint8_t on){
+#if USE_LED
+ #if LED_ACTIVE_LOW
+  on = !on;
+ #endif
+  if(on) LED_PORT |=  (1<<LED_BIT);
+  else   LED_PORT &= ~(1<<LED_BIT);
+#else
+  (void)on;
+#endif
+}
+
 /* ======================= App starten (jmp 0) ======================= */
 static void startApp(void){
+  ledSet(0);                         /* LED aus -- ab hier gehoert sie der App */
   U_UCSRB=0;                         /* UART aus */
   cli();
   ((void(*)(void))0)();              /* Sprung zum Reset-Vektor der App */
@@ -279,15 +364,38 @@ static uint8_t  pageBuf[SPM_PAGESIZE];
 static uint16_t pageBase = 0xFFFF;
 static uint8_t  pageDirty = 0;
 static uint8_t  flashStarted = 0;    /* erst beim ersten 'w' Page 0 (Reset-Vektor) invalidieren */
+static uint8_t  ledBusy = 0;         /* ab dem ersten 'w'/'r': LED auf "Update laeuft" umschalten.
+                                        Eigenes Flag, weil 'p' flashStarted zuruecksetzt (hs485d
+                                        schickt 'p' auch am Verify-Start) -- die LED soll waehrend
+                                        des Verifys aber weiter "beschaeftigt" zeigen. */
 
-static void writePage(uint16_t base){
-  boot_page_erase(base); boot_spm_busy_wait();
+/* PAGE 0 WIRD ZURUECKGEHALTEN, bis das 'g' die CRC ueber das GANZE Image bestaetigt.
+   Grund: Page 0 traegt den Reset-Vektor UND (bis ~0x54) die Interrupt-Vektortabelle. Wuerde sie
+   -- wie frueher -- schon beim Wechsel auf Page 1 geschrieben, dann laesst ein spaeter
+   abgebrochenes Update eine App mit gueltigem Reset-Vektor, aber luecken-/fehlerhaftem Rest
+   zurueck: der Power-on-/Idle-Pfad prueft nur `pgm_read_word(0)!=0xFFFF`, startet sie also --
+   und das Geraet haengt sich beim ersten Interrupt auf und ist am Bus tot.
+   Jetzt gilt: Page 0 bleibt bis zum Schluss GELOESCHT -> jeder Abbruch endet im Booter, der
+   ueber den Bus erreichbar bleibt (= Update einfach wiederholen). */
+static uint8_t  page0Buf[SPM_PAGESIZE];
+static uint8_t  page0Valid = 0;      /* page0Buf enthaelt empfangene Daten, noch nicht geflasht */
+
+static void writePageFrom(uint16_t base, const uint8_t* src){
+  boot_page_erase(base); spmWait();
   for(uint16_t i=0;i<SPM_PAGESIZE;i+=2)
-    boot_page_fill(base+i, pageBuf[i] | ((uint16_t)pageBuf[i+1]<<8));
-  boot_page_write(base); boot_spm_busy_wait();
+    boot_page_fill(base+i, src[i] | ((uint16_t)src[i+1]<<8));
+  boot_page_write(base); spmWait();
   boot_rww_enable();                 /* App-Section wieder lesbar machen */
 }
-static void flushPage(void){ if(pageDirty){ writePage(pageBase); pageDirty=0; } }
+static void flushPage(void){
+  if(!pageDirty) return;
+  if(pageBase==0){                   /* Page 0 nur puffern, NICHT schreiben (siehe oben) */
+    memcpy(page0Buf, pageBuf, SPM_PAGESIZE); page0Valid=1;
+  } else {
+    writePageFrom(pageBase, pageBuf);
+  }
+  pageDirty=0;
+}
 static void bufferBytes(uint16_t addr, const uint8_t* src, uint8_t n){
   for(uint8_t i=0;i<n;i++){
     uint16_t a=addr+i, pb=a & ~(SPM_PAGESIZE-1);
@@ -295,10 +403,26 @@ static void bufferBytes(uint16_t addr, const uint8_t* src, uint8_t n){
     pageBuf[a-pageBase]=src[i]; pageDirty=1;
   }
 }
-static uint16_t appCrc(uint16_t len){          /* CRC16 (Poly 0x1002) ueber App-Flash 0..len-1 */
+/* Flash-Byte lesen, aber Page 0 aus dem Puffer bedienen, solange sie noch nicht geschrieben ist
+   -- sonst laese der CCU-Verify ('r') dort 0xFF und die CRC-Pruefung rechnete auf leerem Flash. */
+static uint8_t appByte(uint16_t a){
+  if(page0Valid && a < SPM_PAGESIZE) return page0Buf[a];
+  return pgm_read_byte(a);
+}
+static uint16_t appCrc(uint16_t len){          /* CRC16 (Poly 0x1002) ueber App 0..len-1 */
   uint16_t crc=0xFFFF;
-  for(uint16_t a=0;a<len;a++) crc16Shift(pgm_read_byte(a), &crc);
+  for(uint16_t a=0;a<len;a++) crc16Shift(appByte(a), &crc);
   return crc;
+}
+
+/* Blinkmuster aus dem frei laufenden Timer1 (clk/1024 = 15625 Hz @16 MHz) ableiten -- ohne
+   delay(), damit das Bus-Timing unberuehrt bleibt. Wird in jedem Schleifendurchlauf aufgerufen. */
+static void ledUpdate(void){
+#if USE_LED
+  uint16_t t = TCNT1;
+  if(ledBusy) ledSet((t & (1U<<11)) != 0);      /* ~3,8 Hz: Update laeuft */
+  else        ledSet((t & 0x3FFF) < 0x0400);    /* 65 ms Blitz je 1,05 s: Booter wartet */
+#endif
 }
 
 /* ======================= Kommando-Logik ======================= */
@@ -353,38 +477,59 @@ static void handleFrame(uint32_t target, uint8_t control, uint32_t sender,
            Booter im Senden, empfaengt also nichts). Bestaetigt auch abgelehnte Boot-Section-Bloecke. */
         uint8_t r[2]={0x00,n};
         sendBootReply(sender,r,2);
+        ledBusy=1;                   /* Daten fliessen -> LED auf "Update laeuft" */
+        /* Nutzdaten JETZT aus rxb herauskopieren: waehrend der folgenden Flash-Operationen laeuft
+           spmWait()->rxPump() weiter und schreibt das naechste Frame in rxb -- data[] waere dann
+           mitten im Puffern ueberschrieben. */
+        uint8_t wbuf[MAX_PACKET_SIZE];
+        if(n>MAX_PACKET_SIZE) n=MAX_PACKET_SIZE;
+        memcpy(wbuf,&data[4],n);
         if(!flashStarted){             /* ERSTER Datenblock: Reset-Vektor (Page 0) invalidieren ->
                                           ein Abbruch laesst die App garantiert ungueltig. */
-          boot_page_erase(0); boot_spm_busy_wait(); boot_rww_enable();
-          flashStarted=1;
+          boot_page_erase(0); spmWait(); boot_rww_enable();
+          flashStarted=1; page0Valid=0;
         }
-        if((uint32_t)addr+n <= BOOT_START) bufferBytes(addr,&data[4],n);  /* Boot-Section schuetzen */
+        if((uint32_t)addr+n <= BOOT_START) bufferBytes(addr,wbuf,n);      /* Boot-Section schuetzen */
       }
       break; }
     case CMD_READ_FLASH:{              /* 'r' [addrHi addrLo len] -> echte Flash-Bytes (Verify) */
-      flushPage();                     /* offene Page committen, damit Verify aktuelle Bytes liest */
       if(dlen>=4){ uint16_t addr=((uint16_t)data[1]<<8)|data[2]; uint8_t n=data[3];
+        ledBusy=1;                     /* Verify laeuft auch als "Update" anzeigen */
+        flushPage();                   /* offene Page committen -- ERST NACH dem Auslesen von addr/n:
+                                          flushPage kann flashen, dabei laeuft rxPump() und
+                                          ueberschreibt data[] (zeigt in rxb). */
         if(n>MAX_PACKET_SIZE)n=MAX_PACKET_SIZE;
         /* Payload = GENAU die n gelesenen Bytes, KEIN cmd/addr/len-Echo davor. hs485d VerifyFlash
            verwirft die Antwort sonst hart: `if(response.size()!=blocksize)return false` -> die CCU
            meldet "unbekannter Fehler", obwohl der Flash korrekt ist (g laeuft, App startet). Zuordnung
            laeuft ueber den frameCounter, nicht ueber den Payload-Inhalt -> Echo ist unnoetig. */
         uint8_t r[MAX_PACKET_SIZE];
-        for(uint8_t i=0;i<n;i++) r[i]=pgm_read_byte(addr+i);
+        for(uint8_t i=0;i<n;i++) r[i]=appByte(addr+i);   /* Page 0 ggf. aus dem Puffer */
         sendBootReply(sender,r,n); }
       break; }
-    case CMD_START_FW:                 /* 'g' [lenHi lenLo crcHi crcLo] -> CRC-Check + App-Start */
+    case CMD_START_FW:{                /* 'g' [lenHi lenLo crcHi crcLo] -> CRC-Check + App-Start */
+      /* Parameter ZUERST sichern -- flushPage()/appCrc() flashen bzw. lassen rxPump() laufen. */
+      uint16_t len=0, want=0; uint8_t haveCrc=(dlen>=5);
+      if(haveCrc){ len =((uint16_t)data[1]<<8)|data[2];
+                   want=((uint16_t)data[3]<<8)|data[4]; }
       flushPage();
       sendAck(sender);
       _delay_ms(5);
-      if(dlen>=5){                     /* mit erwarteter CRC: echte Validierung der ganzen App */
-        uint16_t len =((uint16_t)data[1]<<8)|data[2];
-        uint16_t want=((uint16_t)data[3]<<8)|data[4];
-        if(appCrc(len)==want) startApp();
-      } else if(pgm_read_word(0)!=0xFFFF){ /* ohne CRC: schwacher Reset-Vektor-Sanity */
+      if(haveCrc){                     /* mit erwarteter CRC: echte Validierung der ganzen App */
+        if(appCrc(len)==want){
+          /* Erst JETZT Page 0 schreiben: ab hier ist das Image nachweislich vollstaendig.
+             Vorher bleibt der Reset-Vektor geloescht -> jeder Abbruch endet im Booter. */
+          if(page0Valid){ writePageFrom(0,page0Buf); page0Valid=0; }
+          startApp();
+        }
+      } else if(page0Valid){           /* ohne CRC (z.B. eigener Sender): wenigstens vollstaendige
+                                          Page 0 verlangen, statt nur den Reset-Vektor zu pruefen */
+        writePageFrom(0,page0Buf); page0Valid=0;
         startApp();
+      } else if(pgm_read_word(0)!=0xFFFF && !flashStarted){
+        startApp();                    /* gar kein Update gelaufen -> vorhandene App starten */
       }
-      break;                           /* CRC falsch / keine App -> im Booter bleiben */
+      break; }                         /* CRC falsch / unvollstaendig -> im Booter bleiben */
     case CMD_ANNOUNCE: sendAnnounce(); break;
     default: sendAck(sender); break;   /* im Booter alles ACKen, damit die CCU weiterlaeuft */
   }
@@ -419,6 +564,7 @@ int main(void){
   }
 
   uartInit();
+  ledInit();
   _delay_ms(20);                      /* Bus kurz beruhigen */
   sendStartupReason();
   _delay_ms(5);
@@ -426,7 +572,10 @@ int main(void){
 
   /* Inaktivitaets-Timeout gegen "im Booter haengen bleiben": Timer1 frei laufen
    * lassen (Prescaler 1024 -> ~4,19 s je Ueberlauf @16 MHz). Jeder empfangene Frame
-   * setzt ihn zurueck. Bleibt der Bus IDLE_TIMEOUT_OVF Ueberlaeufe lang still UND ist
+   * setzt den ZAEHLER idleOvf zurueck -- TCNT1 selbst laeuft bewusst DURCH, weil die
+   * Status-LED ihr Blinkmuster daraus ableitet (ein Reset bei jedem Frame liesse sie
+   * waehrend eines Updates stehen). Kostet nur Granularitaet: der Timeout greift dadurch
+   * nach 21-25 s statt exakt 25 s. Bleibt der Bus IDLE_TIMEOUT_OVF Ueberlaeufe lang still UND ist
    * die App intakt (Reset-Vektor != 0xFFFF), springen wir zurueck in die App. Waehrend
    * eines echten Flashs ist Page 0 geloescht -> Reset-Vektor 0xFFFF -> der Timeout
    * startet dann NICHTS (halbe App bleibt liegen), und laufende w-Bloecke halten ihn
@@ -438,9 +587,10 @@ int main(void){
 
   for(;;){
     uint32_t target,sender; uint8_t control,*data,dlen;
+    ledUpdate();
     if(pollFrame(&target,&control,&sender,&data,&dlen)){
       handleFrame(target,control,sender,data,dlen);
-      TCNT1 = 0; idleOvf = 0; T1_IFR = (1<<TOV1);   /* Aktivitaet -> Timeout zuruecksetzen */
+      idleOvf = 0;                                  /* Aktivitaet -> Timeout zuruecksetzen */
     }
     if(T1_IFR & (1<<TOV1)){             /* ~4,19 s vergangen */
       T1_IFR = (1<<TOV1);

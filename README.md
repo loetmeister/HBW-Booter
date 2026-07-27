@@ -195,6 +195,54 @@ kein Merge. Siehe [github.com/maxx3105/HMW-Gateway-Pro](https://github.com/maxx3
 **c) Native CCU-WebUI** — *Einstellungen → Geräte-Firmware → Update*; den Transport macht die
 `hs485d`. Siehe [CCU-Update über die native hs485d](#ccu-update-über-die-native-hs485d).
 
+## ⚠ DE-Pin (RS485-Sendefreigabe) muss zur Platine passen
+
+Der Booter treibt die Sendefreigabe des RS485-Transceivers selbst. **Stimmt der Pin nicht, ist der
+Fehler schwer zu finden:** Der Booter *empfängt* normal (RX lauscht passiv), kann aber **nie senden** —
+der Transceiver bleibt auf Empfang. Das Gerät ist damit am Bus unsichtbar, während die **App** (die den
+richtigen Pin benutzt) völlig normal antwortet.
+
+| Symptom | |
+|---|---|
+| Discovery findet das Gerät | die **App** antwortet — sagt nichts über den Booter aus |
+| Nach `u` kommt auf `p`/`w` nie ein ACK | der Booter hat übernommen und quittiert ins Leere |
+| Nur Booter geflasht → Discovery findet **0 Geräte** | eindeutiger Beleg für den falschen DE-Pin |
+
+Voreinstellung im Booter (`DE_BIT`), abgeglichen mit `RS485_TXEN` der HBWired-Sketche:
+
+| MCU | DE-Pin | Arduino-Pin |
+|---|:---:|:---:|
+| ATmega328P / 328PB | `PD2` | 2 |
+| ATmega32A / 644P / 1284P | `PD4` | 12 (MightyCore-Standard) |
+
+**Vor dem Brennen immer gegen den Sketch prüfen** — manche 328P-Platinen nutzen `PD3` (Pin 3), dann
+`DE_BIT` im Konfigblock von `hbw_booter.c` anpassen. Bei Auto-Direction-Modulen ohne DE-Pin `USE_DE 0`.
+
+## Status-LED: woran man den Booter erkennt
+
+Der Booter blinkt — die App tut das nicht. Damit sieht man von außen sofort, ob ein Gerät im
+Update-Modus hängt, ohne es am Bus suchen zu müssen (der Booter ist für die Discovery unsichtbar).
+
+| Muster | Bedeutung |
+|---|---|
+| kurzer Blitz **~1×/s** (65 ms) | Booter aktiv, wartet — kein Update im Gang |
+| **schnelles Blinken** (~4 Hz) | Update läuft — ab dem ersten `w`/`r`, also Schreiben *und* Verify |
+| LED aus, kein Blinken | Booter läuft nicht (App aktiv oder Gerät ohne Strom) |
+
+Bleibt das Gerät nach einem abgebrochenen Update im Booter, blinkt es also dauerhaft langsam —
+das Update lässt sich dann einfach erneut anstoßen.
+
+Der Blinktakt kommt aus dem frei laufenden Timer1, **ohne `delay()`** — das Bus-Timing bleibt
+unberührt. Pin wie beim DE-Signal gegen den Sketch (`LED`) prüfen:
+
+| MCU | LED-Pin | Arduino-Pin |
+|---|:---:|:---:|
+| ATmega328P / 328PB | `PB5` | 13 (`LED_BUILTIN`) |
+| ATmega32A / 644P / 1284P | `PD2` | 10 (MightyCore-Standard) |
+
+Voreingestellt ist **aktiv HIGH** (wie in HBWired). Für eine Low-Side-LED `LED_ACTIVE_LOW 1`
+setzen, zum Abschalten `USE_LED 0` (Konfigblock in `hbw_booter.c`).
+
 ## Absicherungen
 
 - **ACK pro Block** — jeder `w` wird quittiert (`send_ack`, 3 Retries).
@@ -464,7 +512,7 @@ Geräte-Firmware (`.hex` < `0x10000`, mit `u`→Watchdog-Reset-Handler) ersetzen
 | **CCU-Update vollständig, eigene App läuft danach** | ✅ **HW-verifiziert** — HBW-IO-4-FM **v3.04** über WebUI geflasht, Gerät bootet + meldet Announce FW `0x0304` |
 | **WebUI meldet „Firmware-Update erfolgreich"** | ✅ **HW-verifiziert** (Screenshot + Log) — `r`-Verify komplett inkl. Versionsfeld `@0x6FF0`, danach `h`/`v` → FW `3.04` |
 | ATmega328PB (eigener Chip, für Booter 328P-kompatibel) | ✅ Booter + Test-App + `hbw_combined_328pb.hex` bereit · ⏳ HW-Test offen (`-p m328pb`, avrdude ≥ 7.0) |
-| ATmega32A (Code portabel, `hfuse` dokumentiert) | ✅ Booter + Test-App + `hbw_combined_32.hex` bereit · ⏳ HW-Test am echten RS485 offen |
+| **ATmega32A am echten RS485-Bus** | ✅ **HW-verifiziert** — HBW-IO-12-FM über Gateway `/flash` komplett geflasht (`Bus-Flash OK`, CRC-Gate, App startet, Discovery findet sie) |
 | ATmega644P/644PA (Boot @0xF000, 64 KB = ganzer Flash adressierbar) | ✅ portiert + kompiliert (2732 B) · ⏳ HW-Test offen |
 | ATmega1284P, App < 64 KB (Boot @0x1F000, `RAMPZ=0`) | ✅ portiert + kompiliert (2770 B) · ⏳ HW-Test offen |
 | ATmega1284P, App > 64 KB (Bank-Byte, nur eigener Sender) | ⏳ bewusst zurückgestellt — bei Bedarf nachrüstbar |
