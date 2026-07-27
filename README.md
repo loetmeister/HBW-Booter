@@ -122,7 +122,8 @@ avrdude -c usbasp -p m32    -U flash:w:hbw_combined_32.hex:i    -U hfuse:w:0xC0:
 
 > **⚠ `BOOTSZ` ist chip-abhängig — 4 KB Boot heißt *nicht* überall `BOOTSZ=00`.** Die Boot-Section ist
 > bei uns immer **2048 Words = 4 KB**, aber die Fuse-Kodierung dafür unterscheidet sich (Datenblätter:
-> 32A Tab. 26-6, 644P Tab. 27-7, 1284/1284P Tab. 26-16 — dort sind die Adressen **Word**-Adressen):
+> 32A Tab. 26-6, 328PB Tab. 31-6, 644P Tab. 27-7, 1284/1284P Tab. 26-16 — dort sind die Adressen
+> **Word**-Adressen):
 >
 > | MCU | `BOOTSZ=00` | `BOOTSZ=01` | wir brauchen |
 > |---|---|---|---|
@@ -140,7 +141,8 @@ avrdude -c usbasp -p m32    -U flash:w:hbw_combined_32.hex:i    -U hfuse:w:0xC0:
 
 Der **ATmega328PB** ist ein **eigener** Chip (Signatur `0x1E 95 16`, Extras USART1/SPI1/TWI1/PORTE),
 für den Booter aber 328P-kompatibel: `USART0`/`MCUSR`/`TIFR1` liegen an denselben Adressen,
-`FLASHEND=0x7FFF` → Boot-Section `@0x7000`, `E2END=0x3FF` → Bus-Adresse `@0x3FC` — alles wie beim
+`FLASHEND=0x7FFF` → Boot-Section `@0x7000` (Datenblatt DS40001906 Tab. 31-6: `BOOTSZ=00` = 2048 Words
+@ Word `0x3800`), `E2END=0x3FF` → Bus-Adresse `@0x3FC`, Flash-Page 64 Words = 128 B — alles wie beim
 328P. avr-gcc hat ein eigenes `atmega328pb`-Target (`build.sh` baut es mit), geflasht wird mit
 `-p m328pb`. **Nur avrdude ≥ 7.0 kennt `m328pb`** — die aktuelle avrdude 8.0 aus Arduino / MightyCore /
 MiniCore hat es; eine ältere AVRDUDESS ggf. aktualisieren (oder per `-C` auf die 8.0er-`avrdude.conf` zeigen).
