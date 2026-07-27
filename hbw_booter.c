@@ -55,15 +55,16 @@
 #define USE_DE   1
 
 /* ======================= Chip-Portabilitaet ======================= */
-#if defined(__AVR_ATmega328P__) || defined(__AVR_ATmega328PA__) || defined(__AVR_ATmega328__) \
+#if defined(__AVR_ATmega328P__) || defined(__AVR_ATmega328PB__) || defined(__AVR_ATmega328__) \
  || defined(__AVR_ATmega644P__)  || defined(__AVR_ATmega644PA__) \
  || defined(__AVR_ATmega644__)   || defined(__AVR_ATmega644A__) \
  || defined(__AVR_ATmega1284P__) || defined(__AVR_ATmega1284__)
-  /* 328P(A) / 644P(A) / 1284P sind registergleich (UART0, MCUSR, TIFR1). Nur der 1284P hat
-     zusaetzlich RAMPZ (in main() auf 0) -- 644P/328P haben <=64 KB Flash, kein RAMPZ. Die
-     Boot-Section-Adresse (BOOT_START) folgt generisch aus FLASHEND. Der 328PA ist eine
-     picoPower-Rev des 328P (register- UND signaturgleich): avr-gcc hat KEIN eigenes Target,
-     er wird als atmega328p gebaut -- dieses Makro greift nur, falls eine Toolchain es setzt. */
+  /* 328P / 328PB / 644P(A) / 1284P sind fuer den Booter registergleich (UART0 = USART0, MCUSR,
+     TIFR1 an denselben Adressen). Nur der 1284P hat zusaetzlich RAMPZ (in main() auf 0) --
+     328P/PB/644P haben <=64 KB Flash, kein RAMPZ. Die Boot-Section-Adresse (BOOT_START) folgt
+     generisch aus FLASHEND (328PB: 0x7FFF -> 0x7000, exakt wie 328P). Der 328PB ist ein EIGENER
+     Chip (eigenes avr-gcc-Target, eigene Signatur 0x1E9516, Extras USART1/SPI1/TWI1/PORTE), fuer
+     den Booter aber 328P-kompatibel -- die Extra-Peripherie ruehrt der Booter nicht an. */
   #define RESET_FLAGS  MCUSR
   #define U_UCSRA UCSR0A
   #define U_UCSRB UCSR0B
@@ -90,7 +91,7 @@
   #define UART_INIT_C()  (UCSRC = (1<<URSEL)|(1<<UPM1)|(1<<UCSZ1)|(1<<UCSZ0))
   #define T1_IFR  TIFR               /* 32A: ein gemeinsames Timer-Interrupt-Flag-Register */
 #else
-  #error "Nicht unterstuetzte MCU (nur ATmega32A / ATmega328P(A) / ATmega644P(A) / ATmega1284P)"
+  #error "Nicht unterstuetzte MCU (nur ATmega32A / ATmega328P / ATmega328PB / ATmega644P(A) / ATmega1284P)"
 #endif
 
 /* ======================= Frame-Konstanten ======================= */

@@ -1,6 +1,6 @@
 # HBW-Booter — Over-the-Bus-Firmware-Update für HMW/HBWired-Geräte
 
-Eigener Bootloader für **ATmega328P/PA, ATmega32A, ATmega644P/644PA und ATmega1284P**, mit dem sich
+Eigener Bootloader für **ATmega328P/328PB, ATmega32A, ATmega644P/644PA und ATmega1284P**, mit dem sich
 HomeMatic-Wired-Eigenbau-Geräte (HBWired) **über den RS485-Bus flashen** lassen — ohne ISP, ohne
 Ausbau. Der Booter wird **einmalig** per ISP eingespielt; danach läuft jedes weitere Firmware-Update
 über die Leitung (per `flash_tool.py`, über das [HMW-Gateway](https://github.com/maxx3105/HMW-Gateway-Pro)
@@ -72,18 +72,22 @@ bliebe hängen und liefe in den Response-Timeout. Die Nutzdaten liest sie trotzd
 
 | Datei | Zweck |
 |-------|-------|
-| `hbw_booter.c` | der Booter (C, für **avr-gcc**, portabel 32A/328P) |
-| `build.sh` | Build-Skript (avr-gcc, `--section-start=.text=0x7000`) |
-| `hbw_booter_atmega328p.hex` / `_atmega32.hex` / `_atmega644p.hex` / `_atmega1284p.hex` | kompilierte Booter (~2,6–2,8 KB) |
+| `hbw_booter.c` | der Booter (C, für **avr-gcc**, portabel 32A / 328P / 328PB / 644P / 1284P) |
+| `build.sh` | Build-Skript (avr-gcc); linkt `.text` je MCU: `0x7000` (32A/328P/328PB), `0xF000` (644P), `0x1F000` (1284P) |
+| `hbw_booter_atmega328p.hex` / `_atmega328pb.hex` / `_atmega32.hex` / `_atmega644p.hex` / `_atmega1284p.hex` | kompilierte Booter (~2,6–2,8 KB) |
 | `hbw_testapp/` | Test-App (Arduino-Sketch) mit `u`-Handler; meldet FW `0003` |
 | `hbw_testapp_v5/` | dieselbe App als Version `0005` (zum Sichtbarmachen des Flash-Erfolgs) |
 | `hbw_testapp_328p.hex` / `hbw_testapp_v5_328p.hex` | deren `.hex` |
 | `hbw_testapp_644p/` + `hbw_testapp_644p.hex` | dieselbe Test-App als **ATmega644P/644PA**-Sketch (MightyCore) + `.hex` |
 | `hbw_testapp_1284p/` + `hbw_testapp_1284p.hex` | dieselbe Test-App als **ATmega1284P**-Sketch (MightyCore) + `.hex` |
+| `hbw_testapp_32/` + `hbw_testapp_32.hex` | dieselbe Test-App als **ATmega32A**-Sketch (MightyCore) + `.hex` |
+| `hbw_testapp_328pb/` + `hbw_testapp_328pb.hex` | dieselbe Test-App als **ATmega328PB**-Sketch (MiniCore, `variant=modelPB`) + `.hex` |
 | `hbw_combined_328p.hex` | **DIE ISP-Flash-Datei: HBW-IO-4-FM-App + Booter**, jeweils aktueller Stand |
 | `hbw_combined_TESTAPP_328p.hex` | Test-App v3 + Booter — eingefrorene Referenz aus dem M1/M2-Test |
 | `hbw_combined_644p.hex` | **ISP-Flash-Datei 644P**: Test-App + Booter `@0xF000` (per `merge_hex.py`) |
 | `hbw_combined_1284p.hex` | **ISP-Flash-Datei 1284P**: Test-App + Booter `@0x1F000` (per `merge_hex.py`) |
+| `hbw_combined_32.hex` | **ISP-Flash-Datei 32A**: Test-App + Booter `@0x7000` (per `merge_hex.py`) |
+| `hbw_combined_328pb.hex` | **ISP-Flash-Datei 328PB**: Test-App + Booter `@0x7000` (per `merge_hex.py`) |
 | `hbw_io_4_fm.hex` | HBW-IO-4-FM-App allein (für den Bus-Flash per `flash_tool.py`) |
 | `flash_tool.py` | **Sender**: flasht eine `.hex` über Bus/USB (`z z→u→p→w…→v→g`) |
 | `merge_hex.py` | App-`.hex` + Booter-`.hex` → eine ISP-`combined.hex` (Overlap-Check, ELA-Records für Booter >64 KB) |
@@ -108,7 +112,8 @@ avrdude -c usbasp -p m1284p -U flash:w:hbw_combined_1284p.hex:i -U hfuse:w:0x90:
 
 | MCU | `-p` | `hfuse` Standard | `hfuse` +EESAVE | übrige Fuses |
 |-----|------|:----------------:|:---------------:|--------------|
-| ATmega328P/PA | `m328p` | **0xD8** | 0xD0 | `lfuse=0xFF`, `efuse=0xFD` unverändert |
+| ATmega328P | `m328p` | **0xD8** | 0xD0 | `lfuse=0xFF`, `efuse=0xFD` unverändert |
+| ATmega328PB | `m328pb` | **0xD8** | 0xD0 | wie 328P; **Signatur `0x1E 95 16`**, braucht **avrdude ≥ 7.0** |
 | ATmega32A | `m32` | **0x98** | 0x90 | **`lfuse` unverändert** (CKSEL/CKOPT = Oszillator) |
 | ATmega644P/644PA | `m644p` | **0x98** | 0x90 | **`lfuse`/`efuse` unverändert** (CKSEL/SUT = Oszillator) |
 | ATmega1284P | `m1284p` | **0x98** | 0x90 | **`lfuse`/`efuse` unverändert** (CKSEL/SUT = Oszillator) |
@@ -120,10 +125,13 @@ die Boot-Section dann bei `0x1F000`, beim 644P bei `0xF000`, beim 32A/328P bei `
 gelinkt (`build.sh`). *(Die `hbw_combined_1284p.hex` entsteht wie beim 328P per Merge:
 App-`.hex` unter `0x10000` + `hbw_booter_atmega1284p.hex` ab `0x1F000`.)*
 
-Der **ATmega328PA** wird überall wie ein 328P behandelt: `-p m328p`, Signatur `0x1E 0x95 0x0F`,
-dieselben Fuses und dieselbe `hbw_combined_328p.hex` — avr-gcc und avrdude führen kein eigenes
-`328pa`-Target (nur der **328PB** weicht ab, Signatur `0x1E 0x95 0x16`, eigenes Target). Sollte
-avrdude beim ISP wider Erwarten einen Signatur-Mismatch melden, mit `-F` überschreiben.
+Der **ATmega328PB** ist ein **eigener** Chip (Signatur `0x1E 95 16`, Extras USART1/SPI1/TWI1/PORTE),
+für den Booter aber 328P-kompatibel: `USART0`/`MCUSR`/`TIFR1` liegen an denselben Adressen,
+`FLASHEND=0x7FFF` → Boot-Section `@0x7000`, `E2END=0x3FF` → Bus-Adresse `@0x3FC` — alles wie beim
+328P. avr-gcc hat ein eigenes `atmega328pb`-Target (`build.sh` baut es mit), geflasht wird mit
+`-p m328pb`. **Nur avrdude ≥ 7.0 kennt `m328pb`** — die aktuelle avrdude 8.0 aus Arduino / MightyCore /
+MiniCore hat es; eine ältere AVRDUDESS ggf. aktualisieren (oder per `-C` auf die 8.0er-`avrdude.conf` zeigen).
+Die Extra-Peripherie (USART1 usw.) rührt der Booter nicht an.
 
 > **⚠ 32A/1284P nicht brickbar halten:** Anders als beim 328P steckt der Oszillator hier im `lfuse`.
 > Vorher auslesen — `avrdude -c usbasp -p m1284p -U hfuse:r:-:h -U lfuse:r:-:h` — und **nur** das
@@ -403,8 +411,8 @@ Geräte-Firmware (`.hex` < `0x10000`, mit `u`→Watchdog-Reset-Handler) ersetzen
 | CCU spricht Booter an (`u`/`p`/`g`), quittiert Antworten | ✅ (Gateway-Log: `p`-Antwort akzeptiert) |
 | **CCU-Update vollständig, eigene App läuft danach** | ✅ **HW-verifiziert** — HBW-IO-4-FM **v3.04** über WebUI geflasht, Gerät bootet + meldet Announce FW `0x0304` |
 | **WebUI meldet „Firmware-Update erfolgreich"** | ✅ **HW-verifiziert** (Screenshot + Log) — `r`-Verify komplett inkl. Versionsfeld `@0x6FF0`, danach `h`/`v` → FW `3.04` |
-| ATmega328PA (picoPower-Rev von 328P) | ✅ abgedeckt vom **328P-Binary** — register-/signaturgleich, kein eigener Build/HW-Test nötig |
-| ATmega32A (Code portabel, `hfuse` dokumentiert) | ✅ kompiliert (2646 B) · ⏳ HW-Test am echten RS485 offen |
+| ATmega328PB (eigener Chip, für Booter 328P-kompatibel) | ✅ Booter + Test-App + `hbw_combined_328pb.hex` bereit · ⏳ HW-Test offen (`-p m328pb`, avrdude ≥ 7.0) |
+| ATmega32A (Code portabel, `hfuse` dokumentiert) | ✅ Booter + Test-App + `hbw_combined_32.hex` bereit · ⏳ HW-Test am echten RS485 offen |
 | ATmega644P/644PA (Boot @0xF000, 64 KB = ganzer Flash adressierbar) | ✅ portiert + kompiliert (2732 B) · ⏳ HW-Test offen |
 | ATmega1284P, App < 64 KB (Boot @0x1F000, `RAMPZ=0`) | ✅ portiert + kompiliert (2770 B) · ⏳ HW-Test offen |
 | ATmega1284P, App > 64 KB (Bank-Byte, nur eigener Sender) | ⏳ bewusst zurückgestellt — bei Bedarf nachrüstbar |
