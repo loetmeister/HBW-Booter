@@ -1,0 +1,46 @@
+# ============================================================================
+#  HBWired-Nano mit HBW-Booter (Over-the-Bus-Firmware-Update)
+#  Booter: github.com/maxx3105/HBW-Booter
+#
+#  Ablauf:
+#   1. Board "HBWired-Nano (HBW-Booter)" + Programmer (z.B. USBasp) waehlen
+#   2. Werkzeuge -> Bootloader brennen  => brennt HBW-Booter + Fuses (l/h/e), einmalig per ISP
+#   3. Sketch -> Kompilierte Binaerdatei exportieren  => <sketch>.ino.hex
+#   4. Diese .hex ueber das Gateway (/flash) auf den Bus schicken -- KEIN ISP/Merge mehr
+#
+#  _HAS_BOOTLOADER_ ist als Compiler-Flag automatisch gesetzt (build.extra_flags),
+#  App-Grenze 0x7000 (28 KB) -> die IDE warnt, wenn der Sketch in die Boot-Section ragt.
+#  WICHTIG - Booter nicht versehentlich ueberschreiben:
+#   * "Hochladen" (USB) geht NICHT -- der HBW-Booter ist ein Bus-Booter, kein serieller Optiboot.
+#   * "Hochladen mit Programmer" (ISP) NICHT nach dem Bootloader-Brennen benutzen -- das macht einen
+#     Chip-Erase und LOESCHT den Booter wieder. Symptom: Update bleibt bei "kein ACK" haengen, das
+#     Geraet meldet nach 'u' weiter die App-Version statt der Booter-Version.
+#   => "Bootloader brennen" ist der LETZTE ISP-Schritt. Der Sketch kommt danach NUR ueber /flash (Bus).
+#
+#  Ein Booter je MCU gilt fuer ALLE HBW-Geraete des Typs (Adresse kommt aus dem EEPROM) -- kein
+#  eigener Booter pro Geraetetyp noetig.
+# ============================================================================
+hbwnano.name=HBWired-Nano (HBW-Booter)
+
+hbwnano.upload.tool=avrdude
+hbwnano.upload.tool.default=avrdude
+hbwnano.upload.protocol=arduino
+hbwnano.upload.maximum_size=28672
+hbwnano.upload.maximum_data_size=2048
+hbwnano.upload.speed=57600
+
+hbwnano.bootloader.tool=avrdude
+hbwnano.bootloader.tool.default=avrdude
+hbwnano.bootloader.unlock_bits=0x3F
+hbwnano.bootloader.lock_bits=0x3F
+hbwnano.bootloader.low_fuses=0xFF
+hbwnano.bootloader.high_fuses=0xD8
+hbwnano.bootloader.extended_fuses=0xFD
+hbwnano.bootloader.file=hbw/hbw_booter_atmega328p.hex
+
+hbwnano.build.mcu=atmega328p
+hbwnano.build.f_cpu=16000000L
+hbwnano.build.board=AVR_NANO
+hbwnano.build.core=arduino
+hbwnano.build.variant=eightanaloginputs
+hbwnano.build.extra_flags=-D_HAS_BOOTLOADER_

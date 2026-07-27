@@ -1,0 +1,99 @@
+# ============================================================================
+#  HBWired mit HBW-Booter (Over-the-Bus-Firmware-Update) -- MightyCore-MCUs
+#  Booter: github.com/maxx3105/HBW-Booter
+#
+#  Boards:
+#   * HBWired ATmega32A   (hbw32)   -- Booter @0x7000
+#   * HBWired ATmega644P  (hbw644)  -- Booter @0xF000
+#   * HBWired ATmega1284P (hbw1284) -- Booter @0x1F000
+#
+#  Ablauf (wie beim 328P-hbwnano):
+#   1. Board + Programmer (z.B. USBasp) waehlen
+#   2. Werkzeuge -> Bootloader brennen  => brennt HBW-Booter + Fuses (l/h[/e]), einmalig per ISP
+#   3. Sketch -> Kompilierte Binaerdatei exportieren  => <sketch>.ino.hex
+#   4. Diese .hex ueber das Gateway (/flash) auf den Bus schicken -- KEIN ISP/Merge mehr
+#
+#  _HAS_BOOTLOADER_ ist als Compiler-Flag automatisch gesetzt (build.extra_flags).
+#  App-Grenze = Flash - 4 KB Boot-Section (die IDE warnt, wenn der Sketch hineinragt).
+#
+#  WICHTIG -- Booter nicht versehentlich ueberschreiben:
+#   * "Hochladen" (USB) geht NICHT -- der HBW-Booter ist ein Bus-Booter, kein serieller Optiboot.
+#   * "Hochladen mit Programmer" (ISP) NICHT nach dem Bootloader-Brennen -- Chip-Erase loescht den
+#     Booter wieder (Symptom: Update "kein ACK", Geraet meldet nach 'u' weiter die App-Version).
+#   => "Bootloader brennen" ist der LETZTE ISP-Schritt; der Sketch kommt danach NUR ueber /flash.
+#
+#  !! Die Fuses setzen den OSZILLATOR zwangsweise mit -- 16-MHz-EXTERNER-QUARZ vorausgesetzt !!
+#   * 32A high=0xC0 hat CKOPT=0 (Full-Swing) -- PFLICHT fuer 16 MHz. Der frueher genannte
+#     0x98 (CKOPT=1) ist nur bis ~8 MHz zuverlaessig -> 16-MHz-Quarz schwingt evtl. nicht an.
+#   * EESAVE=keep (Busadresse im EEPROM ueberlebt das Brennen), JTAG aus (PC2-PC5 frei),
+#     BOOTRST an + BOOTSZ=2048 W (4 KB Boot). ATmega32A hat KEIN extended-fuse.
+#   * Anderer Takt als 16 MHz? Dann low_fuses (und beim 32A das high-CKOPT-Bit) anpassen!
+#
+#  Ein Booter je MCU gilt fuer ALLE HBW-Geraete des Typs (Adresse kommt aus dem EEPROM).
+#  Diese Datei liegt im Core-Ordner -> geht bei einem MightyCore-Update VERLOREN, dann neu anlegen.
+# ============================================================================
+
+# ---- ATmega32A (Booter @0x7000, kein extended-fuse) ------------------------
+hbw32.name=HBWired ATmega32A (HBW-Booter)
+hbw32.upload.tool=avrdude
+hbw32.upload.tool.default=avrdude
+hbw32.upload.maximum_size=28672
+hbw32.upload.maximum_data_size=2048
+hbw32.bootloader.tool=avrdude
+hbw32.bootloader.tool.default=avrdude
+hbw32.bootloader.unlock_bits=0xFF
+hbw32.bootloader.lock_bits=0xFF
+hbw32.bootloader.low_fuses=0xFF
+hbw32.bootloader.high_fuses=0xC0
+hbw32.bootloader.file=hbw/hbw_booter_atmega32.hex
+hbw32.build.mcu=atmega32
+hbw32.build.f_cpu=16000000L
+hbw32.build.board=AVR_ATmega32
+hbw32.build.core=MCUdude_corefiles
+hbw32.build.variant=standard
+hbw32.build.extra_flags=-D_HAS_BOOTLOADER_
+hbw32.ltoarcmd=avr-ar
+
+# ---- ATmega644P (Booter @0xF000) -------------------------------------------
+hbw644.name=HBWired ATmega644P (HBW-Booter)
+hbw644.upload.tool=avrdude
+hbw644.upload.tool.default=avrdude
+hbw644.upload.maximum_size=61440
+hbw644.upload.maximum_data_size=4096
+hbw644.bootloader.tool=avrdude
+hbw644.bootloader.tool.default=avrdude
+hbw644.bootloader.unlock_bits=0xFF
+hbw644.bootloader.lock_bits=0xFF
+hbw644.bootloader.low_fuses=0xF7
+hbw644.bootloader.high_fuses=0xD0
+hbw644.bootloader.extended_fuses=0xFD
+hbw644.bootloader.file=hbw/hbw_booter_atmega644p.hex
+hbw644.build.mcu=atmega644p
+hbw644.build.f_cpu=16000000L
+hbw644.build.board=AVR_ATmega644
+hbw644.build.core=MCUdude_corefiles
+hbw644.build.variant=standard
+hbw644.build.extra_flags=-D_HAS_BOOTLOADER_
+hbw644.ltoarcmd=avr-ar
+
+# ---- ATmega1284P (Booter @0x1F000) -----------------------------------------
+hbw1284.name=HBWired ATmega1284P (HBW-Booter)
+hbw1284.upload.tool=avrdude
+hbw1284.upload.tool.default=avrdude
+hbw1284.upload.maximum_size=126976
+hbw1284.upload.maximum_data_size=16384
+hbw1284.bootloader.tool=avrdude
+hbw1284.bootloader.tool.default=avrdude
+hbw1284.bootloader.unlock_bits=0xFF
+hbw1284.bootloader.lock_bits=0xFF
+hbw1284.bootloader.low_fuses=0xF7
+hbw1284.bootloader.high_fuses=0xD0
+hbw1284.bootloader.extended_fuses=0xFD
+hbw1284.bootloader.file=hbw/hbw_booter_atmega1284p.hex
+hbw1284.build.mcu=atmega1284p
+hbw1284.build.f_cpu=16000000L
+hbw1284.build.board=AVR_ATmega1284
+hbw1284.build.core=MCUdude_corefiles
+hbw1284.build.variant=standard
+hbw1284.build.extra_flags=-D_HAS_BOOTLOADER_
+hbw1284.ltoarcmd=avr-ar

@@ -1,0 +1,36 @@
+# ============================================================================
+#  HBWired ATmega328PB mit HBW-Booter (Over-the-Bus-Firmware-Update) -- MiniCore
+#  Booter: github.com/maxx3105/HBW-Booter        Booter @0x7000
+#
+#  Ablauf: Board + Programmer (z.B. USBasp) waehlen -> Werkzeuge -> Bootloader brennen
+#  (HBW-Booter + Fuses, LETZTER ISP-Schritt) -> Sketch exportieren -> .ino.hex ueber Gateway /flash.
+#   * "Hochladen" (USB) geht NICHT -- Bus-Booter, kein serieller Optiboot.
+#   * "Hochladen mit Programmer" (ISP) NICHT danach benutzen -- Chip-Erase loescht den Booter.
+#  _HAS_BOOTLOADER_ ist als Compiler-Flag automatisch gesetzt (build.extra_flags). App-Grenze 0x7000.
+#
+#  FUSES (16-MHz-EXTERNER-QUARZ vorausgesetzt): low=0xFF, high=0xD0 (EESAVE=keep -> Busadresse im
+#  EEPROM bleibt, BOOTRST an, BOOTSZ=2048 W = 4 KB Boot), ext=0xF5 (BOD 2.7 V, CFD=0 wie MiniCore
+#  modelPB). Der 328PB hat die eigene Signatur 0x1E9516 -> braucht avrdude >= 7.0 (die avrdude 8.0
+#  aus Arduino/MightyCore/MiniCore hat sie). Anderer Takt? Dann low_fuses anpassen.
+#  Diese Datei liegt im Core-Ordner -> geht bei einem MiniCore-Update VERLOREN, dann neu anlegen.
+# ============================================================================
+hbw328pb.name=HBWired ATmega328PB (HBW-Booter)
+hbw328pb.upload.tool=avrdude
+hbw328pb.upload.tool.default=avrdude
+hbw328pb.upload.maximum_size=28672
+hbw328pb.upload.maximum_data_size=2048
+hbw328pb.bootloader.tool=avrdude
+hbw328pb.bootloader.tool.default=avrdude
+hbw328pb.bootloader.unlock_bits=0xFF
+hbw328pb.bootloader.lock_bits=0xFF
+hbw328pb.bootloader.low_fuses=0xFF
+hbw328pb.bootloader.high_fuses=0xD0
+hbw328pb.bootloader.extended_fuses=0xF5
+hbw328pb.bootloader.file=hbw/hbw_booter_atmega328pb.hex
+hbw328pb.build.mcu=atmega328pb
+hbw328pb.build.f_cpu=16000000L
+hbw328pb.build.board=AVR_ATmega328
+hbw328pb.build.core=MCUdude_corefiles
+hbw328pb.build.variant=pb-variant
+hbw328pb.build.extra_flags=-D_HAS_BOOTLOADER_
+hbw328pb.ltoarcmd=avr-ar

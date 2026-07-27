@@ -312,6 +312,32 @@ hbwnano.build.extra_flags=-D_HAS_BOOTLOADER_
 ```
 und `hbw_booter_atmega328p.hex` nach `<core>/bootloaders/hbw/` kopieren.
 
+### Die anderen MCUs: MightyCore (32A/644P/1284P) und MiniCore (328PB)
+
+Der 328P läuft über den Standard-**arduino**-Core (oben); die übrigen MCUs kommen aus anderen Cores,
+also je eine `boards.local.txt` **dort**. Die fertigen Dateien liegen im Repo unter
+[`arduino-ide/`](arduino-ide/) — Inhalt in den jeweiligen Core-Ordner kopieren und die passende
+Booter-`.hex` nach `<core>/bootloaders/hbw/`.
+
+| Board (FQBN) | Core | `lfuse` | `hfuse` | `efuse` |
+|---|---|:--:|:--:|:--:|
+| `MightyCore:avr:hbw32` — ATmega32A | MightyCore | `0xFF` | **`0xC0`** | *(hat keins)* |
+| `MightyCore:avr:hbw644` — ATmega644P | MightyCore | `0xF7` | `0xD0` | `0xFD` |
+| `MightyCore:avr:hbw1284` — ATmega1284P | MightyCore | `0xF7` | `0xD0` | `0xFD` |
+| `MiniCore:avr:hbw328pb` — ATmega328PB | MiniCore | `0xFF` | `0xD0` | `0xF5` |
+
+Alle setzen `-D_HAS_BOOTLOADER_`, `EESAVE=keep` (Busadresse überlebt das Brennen), JTAG aus, BOOTRST +
+4 KB Boot. Zwei MCUdude-Eigenheiten sind in den Dateien schon berücksichtigt: **`<board>.ltoarcmd=avr-ar`**
+(sonst bricht der Compile mit `{ltoarcmd}`-Fehler ab, weil ein eigenständiges Board das LTO-Menü nicht
+erbt) und beim 328PB `build.variant=pb-variant`.
+
+> ⚠ **32A-Oszillator — `hfuse=0xC0`, nicht `0x98`.** „Bootloader brennen" setzt die Fuses **zwangsweise
+> mit**, inklusive Oszillator. Für einen **16-MHz-Quarz** muss beim 32A **`CKOPT=0`** (Full-Swing) gesetzt
+> sein — das leistet `0xC0`. Der früher genannte `0x98` hat `CKOPT=1` und ist nur bis ~8 MHz zuverlässig →
+> der 16-MHz-Quarz schwingt damit u. U. gar nicht an. Bei anderem Takt `low_fuses` (und beim 32A das
+> `CKOPT`-Bit) anpassen. Der 328PB braucht **avrdude ≥ 7.0** (`-p m328pb`, Signatur `0x1E9516`; die
+> avrdude 8.0 aus Arduino/MightyCore/MiniCore hat sie).
+
 **Ablauf:** IDE neu starten → Board **„HBWired-Nano (HBW-Booter)"** + Programmer (z. B. USBasp)
 wählen → **Bootloader brennen** (Booter + Fuses, einmalig per ISP) → Sketch → *Kompilierte
 Binärdatei exportieren* → die `.ino.hex` über das Gateway (`/flash`) flashen.
@@ -325,8 +351,9 @@ Binärdatei exportieren* → die `.ino.hex` über das Gateway (`/flash`) flashen
 
 > ⚠ `boards.local.txt` liegt im Core-Ordner und geht bei einem **Core-Update verloren** — dann neu
 > anlegen. Update-sicher ist ein eigener `Documents/Arduino/hardware/…`-Ordner (braucht dann aber eine
-> eigene `platform.txt`). Für andere MCUs (32A/644P/1284P) analoge Einträge; 644P/1284P laufen über
-> MightyCore.
+> eigene `platform.txt`). Das gilt für **alle** HBW-Boards — auch die vier MightyCore-/MiniCore-Boards
+> oben; deren fertige `boards.local.txt` liegen im Repo unter [`arduino-ide/`](arduino-ide/) zum
+> Zurückkopieren.
 
 ## CCU-Update über die native hs485d
 
