@@ -100,25 +100,104 @@ bliebe hängen und liefe in den Response-Timeout. Die Nutzdaten liest sie trotzd
 
 Mit **AVRDUDESS** oder `avrdude` (nicht die Arduino-IDE — die brennt ihren eigenen Optiboot):
 
+#### Schritt für Schritt
+
+**Schritt 1 — vorhandene Fuses auslesen und notieren.** Immer zuerst, nie raten:
+
 ```sh
-# 328P (Nano/Uno, Entwicklung): SPIEN bleibt an -> nichts brickbar
-avrdude -c usbasp -p m328p  -U flash:w:hbw_combined_328p.hex:i  -U hfuse:w:0xD8:m
-# 1284P (Produktivgeraet): hfuse 0xD2 = BOOTSZ 01 (4 KB Boot @0x1F000!) + EESAVE; lfuse = Takt
-avrdude -c usbasp -p m1284p -U flash:w:hbw_combined_1284p.hex:i -U hfuse:w:0xD2:m
-# 32A: hfuse 0xC0 -- enthaelt CKOPT=0 (Full-Swing, PFLICHT fuer 16-MHz-Quarz), kein efuse
-avrdude -c usbasp -p m32    -U flash:w:hbw_combined_32.hex:i    -U hfuse:w:0xC0:m
+avrdude -c usbasp -p m644p -U lfuse:r:-:h -U hfuse:r:-:h -U efuse:r:-:h -U lock:r:-:h
 ```
 
-**Fuses je MCU** — bei allen: *BOOTRST aktiv + BOOTSZ = 2048 Words (4 KB Boot)*, `SPIEN` bleibt an
-→ ISP immer möglich.
+Läuft das Gerät bereits mit seinem Quarz, ist der ausgelesene `lfuse` nachweislich richtig — dann
+behalte ihn und ändere nur den `hfuse`. Das ist der sicherste Weg (**Ausnahme ATmega32A**, siehe unten).
 
-| MCU | `-p` | `hfuse` Standard | `hfuse` +EESAVE | BOOTSZ | übrige Fuses |
-|-----|------|:----------------:|:---------------:|:------:|--------------|
-| ATmega328P | `m328p` | **0xD8** | 0xD0 | `00` | `lfuse=0xFF`, `efuse=0xFD` unverändert |
-| ATmega328PB | `m328pb` | **0xD8** | 0xD0 | `00` | wie 328P; **Signatur `0x1E 95 16`**, braucht **avrdude ≥ 7.0** |
-| ATmega32A | `m32` | **0xC8** | 0xC0 | `00` | `lfuse` = Takt (CKSEL/SUT); **kein `efuse`** |
-| ATmega644P/644PA | `m644p` | **0xDA** | 0xD2 | **`01`** | `lfuse`/`efuse` = Takt/BOD |
-| ATmega1284P | `m1284p` | **0xDA** | 0xD2 | **`01`** | `lfuse`/`efuse` = Takt/BOD |
+**Schritt 2 — Flash und Fuses in EINEM Aufruf schreiben.** Reihenfolge und `-e` sind wichtig:
+
+```sh
+# ATmega644P -- combined = App + Booter
+avrdude -c usbasp -p m644p -e \
+        -U flash:w:HBW-IO-12-FM_atmega644p_combined.hex:i \
+        -U lfuse:w:0xF7:m -U hfuse:w:0xD2:m -U efuse:w:0xFC:m
+```
+
+```sh
+# ATmega32A -- kein efuse!
+avrdude -c usbasp -p m32 -e \
+        -U flash:w:HBW-IO-12-FM_atmega32_combined.hex:i \
+        -U lfuse:w:0x3F:m -U hfuse:w:0xC0:m
+```
+
+```sh
+# ATmega328P (Nano/Uno, Entwicklung)
+avrdude -c usbasp -p m328p -e \
+        -U flash:w:hbw_combined_328p.hex:i \
+        -U lfuse:w:0xFF:m -U hfuse:w:0xD0:m -U efuse:w:0xFC:m
+```
+
+- **`-e` (Chip-Erase) muss dabei sein.** Flash kann beim Schreiben nur `1 → 0` ziehen; ohne
+  vorheriges Löschen bleiben alte `0`-Bits stehen → sporadische Verify-Fehler.
+- **In AVRDUDESS** entspricht das dem Haken *„Flash und EEPROM löschen (-e)"*, dem Dateifeld unter
+  *Flash* und den drei Feldern **L / H / E** rechts unter *Sicherungsbytes* — dort zusätzlich
+  *„Sicherungsbytes einstellen"* ankreuzen, sonst werden sie **nicht** geschrieben.
+- **Bit-Taktung (-B)** leer lassen; nur bei wackeliger Verbindung auf `-B 8` verlangsamen.
+
+**Schritt 3 — Ergebnis prüfen.** avrdude muss `verified` melden. Kommt stattdessen
+
+```
+Warning: flash verification mismatch
+  device 0xee != input 0xea at addr 0xf08e
+```
+
+dann liegt der Fehler **nicht** in der Datei: An dieser Adresse ließ sich ein Bit nicht von `1` auf `0`
+programmieren. Reproduzierbar dieselbe Adresse = **defekte Flash-Zelle**, der Chip gehört getauscht.
+Ein einzelnes verfälschtes Byte im Booter kann jedes Folgeverhalten unerklärlich machen — hier etwa
+`__do_copy_data`, das dann die Startwerte aller initialisierten Variablen aus der falschen
+Flash-Adresse holt.
+
+**Schritt 4 — Busadresse setzen.** Der Chip-Erase löscht auch das EEPROM, das Gerät meldet sich also
+mit der Fallback-Adresse `0x42FFFFFF` (Serial `HBW4073471`). Mit `hmw_set_address.py` (Bus-Kommando
+`@a`) die richtige Adresse setzen, danach an der CCU anlernen. *Ab dem zweiten Mal* bleibt sie dank
+`EESAVE=0` erhalten.
+
+**Ab jetzt kein ISP mehr:** Jedes weitere Firmware-Update läuft über den Bus. Ein ISP-Schreibvorgang
+würde den Booter per Chip-Erase wieder löschen.
+
+### Fuses — vollständige Werte je MCU
+
+Alle Angaben für **16-MHz-Quarz an 5 V**, wie bei HBWired-Geräten üblich. `—` heißt: Diese Fuse
+existiert auf dem Chip **nicht**.
+
+| MCU | `-p` | `lfuse` | `hfuse` | `efuse` | `lock` |
+|-----|------|:-------:|:-------:|:-------:|:------:|
+| ATmega328P | `m328p` | `0xFF` | `0xD0` | `0xFC` | `0xFF` |
+| ATmega328PB | `m328pb` | `0xFF` | `0xD0` | `0xF4` | `0xFF` |
+| ATmega32A | `m32` | `0x3F` | `0xC0` | — | `0xFF` |
+| ATmega644P / 644PA | `m644p` | `0xF7` | `0xD2` | `0xFC` | `0xFF` |
+| ATmega1284P | `m1284p` | `0xF7` | `0xD2` | `0xFC` | `0xFF` |
+
+**Was diese Werte bewirken** — jedes Byte einzeln:
+
+| Fuse | Was drinsteckt | Warum dieser Wert |
+|---|---|---|
+| `lfuse` (328P/PB) `0xFF` | `CKSEL=1111`, `SUT=11`, `CKDIV8=1` | Quarz ≥ 8 MHz, langsamer Hochlauf, **kein** /8-Teiler → volle 16 MHz |
+| `lfuse` (32A) `0x3F` | zusätzlich `BODEN=0`, `BODLEVEL=0` | Beim 32A sitzt der **Brown-out im lfuse**: an, 4,0 V. `0xFF` = BOD aus |
+| `lfuse` (644P/1284P) `0xF7` | `CKSEL=0111`, `SUT=11`, `CKDIV8=1` | **Full-Swing**-Quarzoszillator — die robuste Variante für 16 MHz |
+| `hfuse` (328P/PB) `0xD0` | `BOOTRST=0`, `BOOTSZ=00`, `EESAVE=0`, `SPIEN=0`, `WDTON=1` | Reset → Booter, 4 KB Boot, EEPROM bleibt, ISP bleibt möglich |
+| `hfuse` (32A) `0xC0` | wie oben **plus `CKOPT=0`**, `JTAGEN=1` | `CKOPT=0` = Full-Swing (**Pflicht** für 16 MHz), JTAG aus → PC2–PC5 frei |
+| `hfuse` (644P/1284P) `0xD2` | `BOOTRST=0`, **`BOOTSZ=01`**, `EESAVE=0`, `JTAGEN=1` | `01` statt `00` — siehe Warnung unten |
+| `efuse` `0xFC` / `0xF4` | `BODLEVEL=100` | Brown-out **4,3 V**. Bei 16 MHz sind diese MCUs erst ab 4,5 V spezifiziert, darum die hohe Schwelle |
+| `lock` `0xFF` | keine Sperren | ISP bleibt uneingeschränkt möglich |
+
+**Bewusste Varianten**, falls du es anders willst:
+
+| Statt | nimm | Wirkung |
+|---|---|---|
+| `hfuse` … `0` an Bit 3 | `0xD8` / `0xC8` / `0xDA` | `EESAVE=1` → Chip-Erase löscht auch das EEPROM (Busadresse weg). Nur für Entwicklung sinnvoll |
+| `efuse 0xFC` | `0xFD` (328PB: `0xF5`) | BOD auf 2,7 V — Chip läuft bei Unterspannung außerhalb der Spezifikation weiter |
+| `lfuse 0x3F` (32A) | `0xFF` | Brown-out ganz aus |
+
+> Die IDE-Custom-Boards unter [`arduino-ide/`](arduino-ide/) brennen derzeit die BOD-**2,7-V**-Variante
+> (`efuse 0xFD`/`0xF5`, 32A `lfuse 0xFF`). Wer die 4,3-V-Werte aus der Tabelle will, passt sie dort an.
 
 > **⚠ `BOOTSZ` ist chip-abhängig — 4 KB Boot heißt *nicht* überall `BOOTSZ=00`.** Die Boot-Section ist
 > bei uns immer **2048 Words = 4 KB**, aber die Fuse-Kodierung dafür unterscheidet sich (Datenblätter:
@@ -250,11 +329,15 @@ setzen, zum Abschalten `USE_LED 0` (Konfigblock in `hbw_booter.c`).
   byte-genau (`read_flash` wartet auf den vollständigen Frame).
 - **CRC-Gate** — der Booter startet die neue App beim `g` nur, wenn die CRC16 über die ganze App
   stimmt (`appCrc`), sonst bleibt er im Update-Modus.
-- **Stromausfall-Schutz** — Page 0 (Reset-Vektor) wird beim **ersten `w`** gelöscht und **zuletzt**
-  geschrieben; der Power-on-Pfad startet nur eine App mit gesetztem Reset-Vektor. Bricht der Flash
-  ab, bleibt der Booter aktiv statt eine halb-geschriebene App zu booten. (Bewusst **nicht** schon
-  beim `p` — sonst zerstörte ein leerer Handshake `p → g` ohne `w`, z. B. wenn die CCU kein Image
-  hat, die noch intakte App unnötig.)
+- **Stromausfall-Schutz** — Page 0 (Reset-Vektor) wird beim **ersten `w`** gelöscht; der
+  Power-on-Pfad startet nur eine App mit gesetztem Reset-Vektor. Bricht der Flash ab, bleibt der
+  Booter aktiv statt eine halb-geschriebene App zu booten. (Bewusst **nicht** schon beim `p` — sonst
+  zerstörte ein leerer Handshake `p → g` ohne `w`, z. B. wenn die CCU kein Image hat, die noch
+  intakte App unnötig.) Dass Page 0 auch **zuletzt geschrieben** wird, kommt vom Sender: Das
+  HMW-Gateway schreibt in zwei Durchgängen (erst alles ab `0x0080`, dann `0x0000`/`0x0040`). Der
+  Booter selbst hält Page 0 **nicht** zurück — ein früherer Versuch, das im Booter zu tun, brach
+  bei 644P/1284P den Verify, weil dort eine Flash-Page 256 statt 128 Byte groß ist und die
+  Aufteilung des Senders damit nicht mehr zur Page-Grenze passt.
 - **Selbstschutz** — Schreibadressen ≥ `0x7000` (Boot-Section) werden abgelehnt.
 - **Letzte Page committen** — der `p`-Handler flusht eine noch offene Page zuerst. hs485d ruft `p`
   auch am **VerifyFlash-Start** (nach der w-Schleife); ohne das ginge die letzte, noch gepufferte

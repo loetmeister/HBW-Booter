@@ -369,33 +369,14 @@ static uint8_t  ledBusy = 0;         /* ab dem ersten 'w'/'r': LED auf "Update l
                                         schickt 'p' auch am Verify-Start) -- die LED soll waehrend
                                         des Verifys aber weiter "beschaeftigt" zeigen. */
 
-/* PAGE 0 WIRD ZURUECKGEHALTEN, bis das 'g' die CRC ueber das GANZE Image bestaetigt.
-   Grund: Page 0 traegt den Reset-Vektor UND (bis ~0x54) die Interrupt-Vektortabelle. Wuerde sie
-   -- wie frueher -- schon beim Wechsel auf Page 1 geschrieben, dann laesst ein spaeter
-   abgebrochenes Update eine App mit gueltigem Reset-Vektor, aber luecken-/fehlerhaftem Rest
-   zurueck: der Power-on-/Idle-Pfad prueft nur `pgm_read_word(0)!=0xFFFF`, startet sie also --
-   und das Geraet haengt sich beim ersten Interrupt auf und ist am Bus tot.
-   Jetzt gilt: Page 0 bleibt bis zum Schluss GELOESCHT -> jeder Abbruch endet im Booter, der
-   ueber den Bus erreichbar bleibt (= Update einfach wiederholen). */
-static uint8_t  page0Buf[SPM_PAGESIZE];
-static uint8_t  page0Valid = 0;      /* page0Buf enthaelt empfangene Daten, noch nicht geflasht */
-
-static void writePageFrom(uint16_t base, const uint8_t* src){
+static void writePage(uint16_t base){
   boot_page_erase(base); spmWait();
   for(uint16_t i=0;i<SPM_PAGESIZE;i+=2)
-    boot_page_fill(base+i, src[i] | ((uint16_t)src[i+1]<<8));
+    boot_page_fill(base+i, pageBuf[i] | ((uint16_t)pageBuf[i+1]<<8));
   boot_page_write(base); spmWait();
   boot_rww_enable();                 /* App-Section wieder lesbar machen */
 }
-static void flushPage(void){
-  if(!pageDirty) return;
-  if(pageBase==0){                   /* Page 0 nur puffern, NICHT schreiben (siehe oben) */
-    memcpy(page0Buf, pageBuf, SPM_PAGESIZE); page0Valid=1;
-  } else {
-    writePageFrom(pageBase, pageBuf);
-  }
-  pageDirty=0;
-}
+static void flushPage(void){ if(pageDirty){ writePage(pageBase); pageDirty=0; } }
 static void bufferBytes(uint16_t addr, const uint8_t* src, uint8_t n){
   for(uint8_t i=0;i<n;i++){
     uint16_t a=addr+i, pb=a & ~(SPM_PAGESIZE-1);
@@ -403,15 +384,9 @@ static void bufferBytes(uint16_t addr, const uint8_t* src, uint8_t n){
     pageBuf[a-pageBase]=src[i]; pageDirty=1;
   }
 }
-/* Flash-Byte lesen, aber Page 0 aus dem Puffer bedienen, solange sie noch nicht geschrieben ist
-   -- sonst laese der CCU-Verify ('r') dort 0xFF und die CRC-Pruefung rechnete auf leerem Flash. */
-static uint8_t appByte(uint16_t a){
-  if(page0Valid && a < SPM_PAGESIZE) return page0Buf[a];
-  return pgm_read_byte(a);
-}
-static uint16_t appCrc(uint16_t len){          /* CRC16 (Poly 0x1002) ueber App 0..len-1 */
+static uint16_t appCrc(uint16_t len){          /* CRC16 (Poly 0x1002) ueber App-Flash 0..len-1 */
   uint16_t crc=0xFFFF;
-  for(uint16_t a=0;a<len;a++) crc16Shift(appByte(a), &crc);
+  for(uint16_t a=0;a<len;a++) crc16Shift(pgm_read_byte(a), &crc);
   return crc;
 }
 
@@ -487,7 +462,7 @@ static void handleFrame(uint32_t target, uint8_t control, uint32_t sender,
         if(!flashStarted){             /* ERSTER Datenblock: Reset-Vektor (Page 0) invalidieren ->
                                           ein Abbruch laesst die App garantiert ungueltig. */
           boot_page_erase(0); spmWait(); boot_rww_enable();
-          flashStarted=1; page0Valid=0;
+          flashStarted=1;
         }
         if((uint32_t)addr+n <= BOOT_START) bufferBytes(addr,wbuf,n);      /* Boot-Section schuetzen */
       }
@@ -504,7 +479,7 @@ static void handleFrame(uint32_t target, uint8_t control, uint32_t sender,
            meldet "unbekannter Fehler", obwohl der Flash korrekt ist (g laeuft, App startet). Zuordnung
            laeuft ueber den frameCounter, nicht ueber den Payload-Inhalt -> Echo ist unnoetig. */
         uint8_t r[MAX_PACKET_SIZE];
-        for(uint8_t i=0;i<n;i++) r[i]=appByte(addr+i);   /* Page 0 ggf. aus dem Puffer */
+        for(uint8_t i=0;i<n;i++) r[i]=pgm_read_byte(addr+i);
         sendBootReply(sender,r,n); }
       break; }
     case CMD_START_FW:{                /* 'g' [lenHi lenLo crcHi crcLo] -> CRC-Check + App-Start */
@@ -516,18 +491,9 @@ static void handleFrame(uint32_t target, uint8_t control, uint32_t sender,
       sendAck(sender);
       _delay_ms(5);
       if(haveCrc){                     /* mit erwarteter CRC: echte Validierung der ganzen App */
-        if(appCrc(len)==want){
-          /* Erst JETZT Page 0 schreiben: ab hier ist das Image nachweislich vollstaendig.
-             Vorher bleibt der Reset-Vektor geloescht -> jeder Abbruch endet im Booter. */
-          if(page0Valid){ writePageFrom(0,page0Buf); page0Valid=0; }
-          startApp();
-        }
-      } else if(page0Valid){           /* ohne CRC (z.B. eigener Sender): wenigstens vollstaendige
-                                          Page 0 verlangen, statt nur den Reset-Vektor zu pruefen */
-        writePageFrom(0,page0Buf); page0Valid=0;
+        if(appCrc(len)==want) startApp();
+      } else if(pgm_read_word(0)!=0xFFFF){ /* ohne CRC: schwacher Reset-Vektor-Sanity */
         startApp();
-      } else if(pgm_read_word(0)!=0xFFFF && !flashStarted){
-        startApp();                    /* gar kein Update gelaufen -> vorhandene App starten */
       }
       break; }                         /* CRC falsch / unvollstaendig -> im Booter bleiben */
     case CMD_ANNOUNCE: sendAnnounce(); break;
