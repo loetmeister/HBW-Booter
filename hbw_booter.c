@@ -413,6 +413,7 @@ static void handleFrame(uint32_t target, uint8_t control, uint32_t sender,
 
   if(cmd==CMD_ZERO_START){ if(zCount>=1) zeroComm=1; else zCount++; return; }
   if(cmd==CMD_ZERO_END){ zeroComm=0; zCount=0; return; }
+  if(broadcast) return;  // alle weiteren cmds müssen direkt an die device Adresse gehen!
   if(zeroComm && cmd!=CMD_START_BOOTER) return;
 
   switch(cmd){
