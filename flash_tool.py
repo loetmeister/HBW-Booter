@@ -87,7 +87,7 @@ def appcrc(data):                          # CRC16 (0x1002) ueber die App-Bytes 
     return crc
 
 def read_flash(s, addr, n, tries=4, secs=0.5):
-    frame = build(DEV, 0x18, CENTRAL, [0x72, (addr>>8)&0xFF, addr&0xFF, n])   # r
+    frame = build(devaddr, 0x18, CENTRAL, [0x72, (addr>>8)&0xFF, addr&0xFF, n])   # r
     for _ in range(tries):
         s.write(frame)
         t = time.time(); buf = bytearray()
@@ -103,6 +103,10 @@ def read_flash(s, addr, n, tries=4, secs=0.5):
     return None
 
 port, hexfile = sys.argv[1], sys.argv[2]
+devaddr = DEV
+if len(sys.argv) >= 4 and int(sys.argv[3],16) > 255: devaddr = int(sys.argv[3],16)  # convert hex string to int (base 16)
+if len(sys.argv) >= 4 and int(sys.argv[3],16) <= 255: print("Adresse kleiner 0xFF nicht möglich!")
+print(f"Benutze Geraeteadrese: 0x{devaddr:04X}")
 mem = parse_hex(hexfile); maxa = max(mem)
 print(f"Flashe {hexfile}: {len(mem)} Bytes, 0x0000..0x{maxa:04X}")
 
@@ -112,7 +116,7 @@ time.sleep(2); s.reset_input_buffer()
 print("z z u  (Booter-Einstieg) ...")
 s.write(build(0xFFFFFFFF, 0x98, CENTRAL, [0x7A])); time.sleep(0.05)   # z
 s.write(build(0xFFFFFFFF, 0x9C, CENTRAL, [0x7A])); time.sleep(0.05)   # z
-s.write(build(DEV, 0x18, CENTRAL, [0x75]))                           # u
+s.write(build(devaddr, 0x18, CENTRAL, [0x75]))                           # u
 time.sleep(1.5)
 if any(d[1][:1] == b'\xff' for d in collect(s, 0.5)):
     print("  -> Booter aktiv (StartupReason)")
@@ -120,17 +124,21 @@ else:
     print("  !! kein StartupReason — Booter evtl. nicht aktiv, versuche trotzdem weiter")
 
 print("p  (Blockgroesse) ...")
-s.write(build(DEV, 0x18, CENTRAL, [0x70]))
+s.write(build(devaddr, 0x18, CENTRAL, [0x70]))
 for d in collect(s, 0.5):
-    if d[1][:1] == b'p': print(f"  -> Booter meldet Blockgroesse {d[1][1]}")
+    if d[1][:1] == b'p': print(f"  -> Booter meldet Blockgroesse {d[1][:1]}")
 
 print(f"w  (schreibe {((maxa)//BLK)+1} Bloecke, Page 0 zuletzt) ", end='', flush=True)
 allb = list(range(0, maxa+1, BLK))
 for base in [b for b in allb if b >= 128] + [b for b in allb if b < 128]:  # Page 0 (Reset-Vektor) ZULETZT
     chunk = bytes(mem.get(base+i, 0xFF) for i in range(min(BLK, maxa+1-base)))
     payload = [0x77, (base>>8)&0xFF, base&0xFF, len(chunk)] + list(chunk)
-    if not send_ack(s, build(DEV, 0x18, CENTRAL, payload)):
-        print(f"\n  !! FEHLER: kein ACK @0x{base:04X}"); s.close(); sys.exit(1)
+    if not send_ack(s, build(devaddr, 0x18, CENTRAL, payload)):
+        print(f"\n  !! FEHLER: kein ACK @0x{base:04X}");
+        print("Z Z (Sleep aufheben) ...")
+        s.write(build(0xFFFFFFFF, 0x98, CENTRAL, [0x5A])); time.sleep(0.05)   # Z
+        s.write(build(0xFFFFFFFF, 0x9C, CENTRAL, [0x5A])); time.sleep(1.00)   # Z
+        s.close(); sys.exit(1)
     print(".", end='', flush=True)
 print(" ok")
 
@@ -146,19 +154,27 @@ for base in range(0, maxa+1, BLK):
     else:
         print(".", end='', flush=True)
 if err:
-    print(f"\n  {err} Verify-Fehler -> Abbruch (kein g, App bleibt ungestartet)"); s.close(); sys.exit(1)
+    print(f"\n  {err} Verify-Fehler -> Abbruch (kein g, App bleibt ungestartet)");
+    print("Z Z (Sleep aufheben) ...")
+    s.write(build(0xFFFFFFFF, 0x98, CENTRAL, [0x5A])); time.sleep(0.05)   # Z
+    s.write(build(0xFFFFFFFF, 0x9C, CENTRAL, [0x5A])); time.sleep(1.00)   # Z
+    s.close(); sys.exit(1)
 print(" ok")
 
 appbytes = bytes(mem.get(i, 0xFF) for i in range(maxa+1))
 c = appcrc(appbytes)
 print(f"g  (CRC {c:04X} + App starten) ...")
-s.write(build(DEV, 0x18, CENTRAL, [0x67, (len(appbytes)>>8)&0xFF, len(appbytes)&0xFF, (c>>8)&0xFF, c&0xFF]))
+s.write(build(devaddr, 0x18, CENTRAL, [0x67, (len(appbytes)>>8)&0xFF, len(appbytes)&0xFF, (c>>8)&0xFF, c&0xFF]))
 time.sleep(1.0)
 ok = False
-for d in collect(s, 3.0):
+for d in collect(s, 3.0): #TODO: add validation of sender address
     if d[1][:1] == b'\x41' and len(d[1]) >= 6:
         ver = (d[1][4] << 8) | d[1][5]
         flag = "  <== NEUE FIRMWARE laeuft!" if ver == 0x0005 else ""
         print(f"  ANNOUNCE FW={ver:04X}{flag}"); ok = True
 if not ok: print("  (kein Announce empfangen)")
+
+print("Z Z (Sleep aufheben) ...")
+s.write(build(0xFFFFFFFF, 0x98, CENTRAL, [0x5A])); time.sleep(0.05)   # Z
+s.write(build(0xFFFFFFFF, 0x9C, CENTRAL, [0x5A])); time.sleep(1.00)   # Z
 s.close()
