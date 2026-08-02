@@ -500,7 +500,7 @@ static uint8_t handleFrame(uint32_t target, uint8_t control, uint32_t sender,
     case CMD_ANNOUNCE: sendAnnounce(); break;
     default: sendAck(sender); return 0; break;   /* im Booter alles ACKen, damit die CCU weiterlaeuft */
   }
-  return 1;
+  return 1;                 /* ok für alle anderen gültigen CMDs */
 }
 
 /* ======================= main ======================= */

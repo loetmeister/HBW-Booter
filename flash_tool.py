@@ -106,7 +106,7 @@ port, hexfile = sys.argv[1], sys.argv[2]
 devaddr = DEV
 if len(sys.argv) >= 4 and int(sys.argv[3],16) > 255: devaddr = int(sys.argv[3],16)  # convert hex string to int (base 16)
 if len(sys.argv) >= 4 and int(sys.argv[3],16) <= 255: print("Adresse kleiner 0xFF nicht möglich!")
-print(f"Benutze Geraeteadrese: 0x{devaddr:04X}")
+print(f"Benutze Geraeteadresse: 0x{devaddr:04X}")
 mem = parse_hex(hexfile); maxa = max(mem)
 print(f"Flashe {hexfile}: {len(mem)} Bytes, 0x0000..0x{maxa:04X}")
 
@@ -124,9 +124,9 @@ else:
     print("  !! kein StartupReason — Booter evtl. nicht aktiv, versuche trotzdem weiter")
 
 print("p  (Blockgroesse) ...")
-s.write(build(devaddr, 0x18, CENTRAL, [0x70]))
+s.write(build(devaddr, 0x18, CENTRAL, [0x70]))  # p
 for d in collect(s, 0.5):
-    if d[1][:1] == b'p': print(f"  -> Booter meldet Blockgroesse {d[1][:1]}")
+    if d[1][:1] == b'p' and len(d[1]) >= 2: print(f"  -> Booter meldet Blockgroesse {d[1][1]}")
 
 print(f"w  (schreibe {((maxa)//BLK)+1} Bloecke, Page 0 zuletzt) ", end='', flush=True)
 allb = list(range(0, maxa+1, BLK))
