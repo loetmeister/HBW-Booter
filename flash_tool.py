@@ -126,7 +126,9 @@ else:
 print("p  (Blockgroesse) ...")
 s.write(build(devaddr, 0x18, CENTRAL, [0x70]))  # p
 for d in collect(s, 0.5):
-    if d[1][:1] == b'p' and len(d[1]) >= 2: print(f"  -> Booter meldet Blockgroesse {d[1][1]}")
+    # Booter-Antwort auf 'p' = ACK-Frame mit Payload [0x00, Blockgroesse] (kein 'p'-Echo im 1. Byte!).
+    # Laenge absichern, sonst IndexError bei kurzen Fremd-Frames anderer Bus-Geraete.
+    if (d[0] & 7) == 1 and len(d[1]) >= 2: print(f"  -> Booter meldet Blockgroesse {d[1][1]}"); break
 
 print(f"w  (schreibe {((maxa)//BLK)+1} Bloecke, Page 0 zuletzt) ", end='', flush=True)
 allb = list(range(0, maxa+1, BLK))
