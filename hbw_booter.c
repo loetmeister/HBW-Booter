@@ -413,6 +413,10 @@ static void handleFrame(uint32_t target, uint8_t control, uint32_t sender,
 
   if(cmd==CMD_ZERO_START){ if(zCount>=1) zeroComm=1; else zCount++; return; }
   if(cmd==CMD_ZERO_END){ zeroComm=0; zCount=0; return; }
+  /* Antwortende Kommandos (h/v/n/p/w/r/g/u/...) NUR an die EIGENE Adresse beantworten. Sonst
+     antworten bei einem Broadcast alle Booter am Bus gleichzeitig -> Kollision (Thomas' Fund mit
+     zweitem Geraet am Bus). z/Z (oben) sind die einzigen Broadcast-Kommandos und bleiben antwortlos. */
+  if(broadcast) return;
   if(zeroComm && cmd!=CMD_START_BOOTER) return;
 
   switch(cmd){
