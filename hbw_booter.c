@@ -38,7 +38,7 @@
                                         Geraet OHNE laufende App abgefragt wird; die App meldet sonst ihren
                                         eigenen Typ. Fuers Flashen (Adresse kommt aus dem EEPROM) egal. */
 #define HW_VERSION   0x00
-#define FW_VERSION   0x0001          /* Booter-eigene Version, gemeldet bei 'v' */
+#define FW_VERSION   0x0002          /* Booter-eigene Version, gemeldet bei 'v' */
 #define FALLBACK_ADDR 0x42FFFFFFUL   /* falls EEPROM-Adresse leer (0xFFFFFFFF) */
 
 /* Inaktivitaets-Timeout: nach IDLE_TIMEOUT_OVF Timer1-Ueberlaeufen (je ~4,19 s
@@ -403,21 +403,21 @@ static void ledUpdate(void){
 /* ======================= Kommando-Logik ======================= */
 static uint8_t zCount=0, zeroComm=0;
 
-static void handleFrame(uint32_t target, uint8_t control, uint32_t sender,
+static uint8_t handleFrame(uint32_t target, uint8_t control, uint32_t sender,
                         uint8_t* data, uint8_t dlen){
   rxSenderNum=(control>>1)&0x03;
   uint8_t broadcast=(target==0xFFFFFFFFUL);
-  if(!broadcast && target!=ownAddr) return;
-  if(dlen==0) return;
+  if(!broadcast && target!=ownAddr) return 0;
+  if(dlen==0) return 0;
   uint8_t cmd=data[0];
 
-  if(cmd==CMD_ZERO_START){ if(zCount>=1) zeroComm=1; else zCount++; return; }
-  if(cmd==CMD_ZERO_END){ zeroComm=0; zCount=0; return; }
+  if(cmd==CMD_ZERO_START){ if(zCount>=1) zeroComm=1; else zCount++; return 1; }
+  if(cmd==CMD_ZERO_END){ zeroComm=0; zCount=0; return 1; }
   /* Antwortende Kommandos (h/v/n/p/w/r/g/u/...) NUR an die EIGENE Adresse beantworten. Sonst
      antworten bei einem Broadcast alle Booter am Bus gleichzeitig -> Kollision (Thomas' Fund mit
      zweitem Geraet am Bus). z/Z (oben) sind die einzigen Broadcast-Kommandos und bleiben antwortlos. */
-  if(broadcast) return;
-  if(zeroComm && cmd!=CMD_START_BOOTER) return;
+  if(broadcast) return 0;
+  if(zeroComm && cmd!=CMD_START_BOOTER) return 0;
 
   switch(cmd){
     case CMD_START_BOOTER:             /* im Booter sind wir schon -> bestaetigen + melden */
@@ -501,8 +501,9 @@ static void handleFrame(uint32_t target, uint8_t control, uint32_t sender,
       }
       break; }                         /* CRC falsch / unvollstaendig -> im Booter bleiben */
     case CMD_ANNOUNCE: sendAnnounce(); break;
-    default: sendAck(sender); break;   /* im Booter alles ACKen, damit die CCU weiterlaeuft */
+    default: sendAck(sender); return 0; break;   /* im Booter alles ACKen, damit die CCU weiterlaeuft */
   }
+  return 1;                 /* ok für alle anderen gültigen CMDs */
 }
 
 /* ======================= main ======================= */
@@ -514,6 +515,14 @@ int main(void){
   RAMPZ = 0;                          /* 1284P: App <64 KB -> LPM/SPM adressieren die untere
                                          Flash-Haelfte ohne Bank; der Booter macht nie _far-Zugriffe. */
 #endif
+  uint8_t NoApp = (pgm_read_word(0) == 0xFFFF);
+  /* Reset-QUELLEN-Entscheidung:
+   * Watchdog-Reset (WDRF, Bit3) = von der App gewollt -> im Booter bleiben.
+   * Alles andere (Power-on/Brown-out/extern) -> App starten. */
+  if(!(rf & (1<<WDRF)) && !NoApp){
+    startApp();                       /* Power-on + gueltige App (Reset-Vektor gesetzt) -> App.
+                                         Reset-Vektor leer (Flash-Abbruch) -> im Booter bleiben. */
+  }
 
   /* Bus-Adresse aus den letzten 4 EEPROM-Bytes (E2END-3), big-endian */
   {
@@ -522,15 +531,7 @@ int main(void){
             | ((uint32_t)eeprom_read_byte((uint8_t*)(a+1))<<16)
             | ((uint32_t)eeprom_read_byte((uint8_t*)(a+2))<<8)
             |  (uint32_t)eeprom_read_byte((uint8_t*)(a+3));
-    if(ownAddr==0xFFFFFFFFUL) ownAddr=FALLBACK_ADDR;
-  }
-
-  /* Reset-QUELLEN-Entscheidung:
-   * Watchdog-Reset (WDRF, Bit3) = von der App gewollt -> im Booter bleiben.
-   * Alles andere (Power-on/Brown-out/extern) -> App starten. */
-  if(!(rf & (1<<WDRF)) && pgm_read_word(0) != 0xFFFF){
-    startApp();                       /* Power-on + gueltige App (Reset-Vektor gesetzt) -> App.
-                                         Reset-Vektor leer (Flash-Abbruch) -> im Booter bleiben. */
+    if(ownAddr == 0xFFFFFFFFUL) ownAddr = FALLBACK_ADDR;
   }
 
   uartInit();
@@ -553,14 +554,13 @@ int main(void){
   TCCR1A = 0;
   TCCR1B = (1<<CS12)|(1<<CS10);        /* Timer1: clk/1024, Normal-Mode */
   TCNT1  = 0; T1_IFR = (1<<TOV1);
-  uint8_t idleOvf = 0;
+  uint8_t idleOvf = IDLE_TIMEOUT_OVF -1;  // beim ersten Durchlauf nur kurze Zeit warten. Dann war es ein device reset/restart und kein bootstart
 
   for(;;){
     uint32_t target,sender; uint8_t control,*data,dlen;
     ledUpdate();
     if(pollFrame(&target,&control,&sender,&data,&dlen)){
-      handleFrame(target,control,sender,data,dlen);
-      idleOvf = 0;                                  /* Aktivitaet -> Timeout zuruecksetzen */
+      if (handleFrame(target,control,sender,data,dlen)) idleOvf = 0;       /* Aktivitaet -> Timeout zuruecksetzen */
     }
     if(T1_IFR & (1<<TOV1)){             /* ~4,19 s vergangen */
       T1_IFR = (1<<TOV1);
