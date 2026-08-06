@@ -26,6 +26,7 @@
 #include <avr/pgmspace.h>
 #include <util/delay.h>
 #include <string.h>
+#include "bootmagic.h"    /* geteilter RAM-Marker: 'u'-Update von '!!'-Reset unterscheiden */
 
 /* ======================= KONFIG (hier anpassen) ======================= */
 #ifndef F_CPU
@@ -38,7 +39,7 @@
                                         Geraet OHNE laufende App abgefragt wird; die App meldet sonst ihren
                                         eigenen Typ. Fuers Flashen (Adresse kommt aus dem EEPROM) egal. */
 #define HW_VERSION   0x00
-#define FW_VERSION   0x0002          /* Booter-eigene Version, gemeldet bei 'v' */
+#define FW_VERSION   0x0003          /* Booter-eigene Version, gemeldet bei 'v'. 0x0003: RAM-Marker (bootmagic.h) */
 #define FALLBACK_ADDR 0x42FFFFFFUL   /* falls EEPROM-Adresse leer (0xFFFFFFFF) */
 
 /* Inaktivitaets-Timeout: nach IDLE_TIMEOUT_OVF Timer1-Ueberlaeufen (je ~4,19 s
@@ -515,13 +516,20 @@ int main(void){
   RAMPZ = 0;                          /* 1284P: App <64 KB -> LPM/SPM adressieren die untere
                                          Flash-Haelfte ohne Bank; der Booter macht nie _far-Zugriffe. */
 #endif
+  /* RAM-Marker der App auslesen und SOFORT entwerten (siehe bootmagic.h). Nur ein gewolltes
+   * 'u'-Update setzt ihn; '!!'-Reset / App-Restart / Watchdog-Hang / Power-on tun das nicht. */
+  uint8_t updateWanted = (BOOT_MAGIC_CELL == BOOT_MAGIC_VAL);
+  BOOT_MAGIC_CELL = 0;                 /* entwerten: ein spaeterer Reset OHNE neues 'u' bleibt Reset */
   uint8_t NoApp = (pgm_read_word(0) == 0xFFFF);
-  /* Reset-QUELLEN-Entscheidung:
-   * Watchdog-Reset (WDRF, Bit3) = von der App gewollt -> im Booter bleiben.
-   * Alles andere (Power-on/Brown-out/extern) -> App starten. */
-  if(!(rf & (1<<WDRF)) && !NoApp){
-    startApp();                       /* Power-on + gueltige App (Reset-Vektor gesetzt) -> App.
-                                         Reset-Vektor leer (Flash-Abbruch) -> im Booter bleiben. */
+  /* Reset-QUELLEN-Entscheidung, WDRF-Mehrdeutigkeit per Marker aufgeloest:
+   * - kein WDRF (Power-on/Brown-out/extern) + App    -> App
+   * - WDRF OHNE Marker ('!!'/Restart/WDT-Hang) + App -> App  (frueher blieb er faelschlich im Booter)
+   * - WDRF UND Marker ('u' Update gewollt)           -> im Booter bleiben
+   * - keine gueltige App (Reset-Vektor 0xFFFF)       -> immer im Booter (Flash unfertig)
+   * Thomas' kurzer Erst-Timeout (idleOvf unten) bleibt als Fallback, falls eine App noch OHNE
+   * Marker-Patch laeuft: dann faellt der Booter wenigstens nach ~4 s statt ~25 s in die App. */
+  if(!NoApp && (!(rf & (1<<WDRF)) || !updateWanted)){
+    startApp();
   }
 
   /* Bus-Adresse aus den letzten 4 EEPROM-Bytes (E2END-3), big-endian */
