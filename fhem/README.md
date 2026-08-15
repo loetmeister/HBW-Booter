@@ -8,8 +8,8 @@ sonst nur die CCU kann. Praktisch ein natives `flash_tool.py` im FHEM-Modul, ohn
 transparent auf den Bus. Es wird kein Sonderkommando im Transport gebraucht (anders als `discovery`,
 das der Transport selbst fährt).
 
-**Status: am echten Bus verifiziert** (Dank an **loetmeister** fürs Testen) — mehrere vollständige
-Updates am Stück, inkl. `getConfig` dazwischen und wiederholten Läufen mit geänderter `.hex`.
+**Status: am echten Bus verifiziert** — mehrere vollständige Updates am Stück, inkl. `getConfig`
+dazwischen und wiederholten Läufen mit geänderter `.hex`.
 
 ## Ablauf
 
@@ -89,3 +89,25 @@ bzw. `error: …`).
   sich Wiederholungen nicht stapeln.
 * Ein Gerät im Booter-Modus beantwortet **keine Discovery** — die Zieladresse muss bekannt sein.
 * Am Bus lässt sich Booter vs. App an der Announce unterscheiden: **devType `0x00` = Booter**.
+
+## Danksagung
+
+Dieses Modul gäbe es ohne **[loetmeister](https://github.com/loetmeister)** (Thomas) nicht in
+funktionierendem Zustand. Er hat es an eigener Hardware getestet — Lauf für Lauf, mit FHEM-Logs
+**und** parallelen Bus-Mitschnitten — bis der komplette Update durchlief. Praktisch jeder Fehler
+wurde erst durch seine Mitschnitte auffindbar:
+
+* der falsche `IOWrite`-Aufruf (IO-Hash statt Device-Hash), durch den überhaupt nichts auf den Bus ging,
+* das Control-Byte vor den Nutzdaten (Payload-Offset) und die spontanen Broadcasts des Booters, die
+  die Zustandszuordnung verschoben,
+* der zu großzügige ACK-Filter, der auch die `CMD_ALIVE`-NACKs durchließ,
+* das Retry-Timing gegen das feste 1-s-Fenster von `00_HM485_LAN.pm`.
+
+Ebenso stammt von ihm die Erkenntnis, dass ein fehlendes ACK durch den **Gateway-Retransmit**
+verdeckt wird — „kein Retry im Log" ist deshalb kein Beweis, dass alles glattlief.
+
+Am Booter selbst hat er ebenfalls maßgeblich mitgewirkt:
+[PR #1](https://github.com/maxx3105/HBW-Booter/pull/1) (Zieladresse als Parameter, `Z Z` bei
+Abbruch, Timeout nur auf eigene Frames), zwei gefundene Bugs (`p`-Antwort-Auswertung, Booter
+antwortete auf **jeden** Broadcast) und der Hinweis auf die Mehrdeutigkeit des WDRF-Einstiegs, aus
+dem der RAM-Marker in [`bootmagic.h`](../bootmagic.h) entstand.
