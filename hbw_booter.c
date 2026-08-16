@@ -579,7 +579,7 @@ int main(void){
    * wahr -> startApp() sofort: so eine App kommt NIE in den Booter (und der Erst-Timeout unten
    * wird gar nicht erst erreicht -- er ist KEIN Fallback dafuer). Bewusst so: bus-updatefaehig
    * ist nur, wer mit der gepatchten HBWired-Lib gebaut ist.
-   * Der Erst-Timeout (idleOvf) wirkt nur noch bei ABGEBROCHENEM Update: Booter korrekt per
+   * Der Timeout (idleOvf) wirkt bei ABGEBROCHENEM Update oder configPressed: Booter korrekt per
    * Marker betreten, dann bleibt der Bus still und die App ist noch intakt -> zurueck in die App. */
   if(!NoApp && (!(rf & (1<<WDRF)) || !updateWanted)){
     startApp();
