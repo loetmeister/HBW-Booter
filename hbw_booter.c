@@ -574,8 +574,13 @@ int main(void){
    * - WDRF OHNE Marker ('!!'/Restart/WDT-Hang) + App -> App  (frueher blieb er faelschlich im Booter)
    * - WDRF UND Marker ('u' Update gewollt)           -> im Booter bleiben
    * - keine gueltige App (Reset-Vektor 0xFFFF)       -> immer im Booter (Flash unfertig)
-   * Thomas' kurzer Erst-Timeout (idleOvf unten) bleibt als Fallback, falls eine App noch OHNE
-   * Marker-Patch laeuft: dann faellt der Booter wenigstens nach ~4 s statt ~25 s in die App. */
+   * ACHTUNG (von loetmeister aufgezeigt): Der Marker ist damit PFLICHT. Eine App OHNE
+   * Marker-Patch setzt ihn nie -> !updateWanted ist immer wahr -> die Oder-Bedingung ist immer
+   * wahr -> startApp() sofort: so eine App kommt NIE in den Booter (und der Erst-Timeout unten
+   * wird gar nicht erst erreicht -- er ist KEIN Fallback dafuer). Bewusst so: bus-updatefaehig
+   * ist nur, wer mit der gepatchten HBWired-Lib gebaut ist.
+   * Der Erst-Timeout (idleOvf) wirkt nur noch bei ABGEBROCHENEM Update: Booter korrekt per
+   * Marker betreten, dann bleibt der Bus still und die App ist noch intakt -> zurueck in die App. */
   if(!NoApp && (!(rf & (1<<WDRF)) || !updateWanted)){
     startApp();
   }
