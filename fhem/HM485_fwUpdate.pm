@@ -343,14 +343,20 @@ sub HM485_fwu_appcrc {
 1;
 
 # ============================================================================
+#  HM485_fwUpdate.pm nach .../fhem/FHEM/lib/HM485 kopieren
 #  >>> INTEGRATION in 10_HM485.pm  (kc-GitHub/FHEM-HM485) <<<
 #
+#  (0) weitere "use lib.." einbinden:
+#  use lib::HM485::HM485_fwUpdate;
+#
 #  (1) set-Befehl:
-#        %sets/setList:   'fwUpdate' => 'textField',
+#        %sets/setList:   nach "'getConfig' => 'noArg',":
+#                         'fwUpdate' => 'textField',
+#
 #        in HM485_Set():  } elsif ($cmd eq 'fwUpdate') {
 #                             return HM485_fwu_Start($hash, $value);
-#                         }
-#      ($value = Dateipfad -- genau wie von Thomas eingebaut, mit schliessender Klammer.)
+#              vor Zeile "}elsif ($cmd eq 'raw')... "
+#      ($value = Dateipfad)
 #
 #  (2) Antwort-Hook -- in HM485_Parse($ioHash,$message), direkt NACH der Zeile
 #         my $msgData = uc( unpack ('H*', substr($message, 4)));
@@ -360,7 +366,7 @@ sub HM485_fwu_appcrc {
 #
 #        foreach my $d (values %{$modules{HM485}{defptr}}) {
 #            next unless $d->{fwu} && $d->{IODev} && $d->{IODev} == $ioHash;
-#            HM485::Util::Log3($ioHash, 3, 'fwUpdate RX: msgCmd='.$msgCmd.' msgData='.$msgData);
+#            HM485::Util::Log3($ioHash, 5, 'fwUpdate RX: msgCmd='.$msgCmd.' msgData='.$msgData);
 #            HM485_fwu_OnResp($d, $msgData, $msgCmd);     # $msgCmd NEU: fuer die NACK-Erkennung
 #            return $ioHash->{NAME};
 #        }
