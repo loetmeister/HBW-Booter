@@ -51,13 +51,14 @@ Details, auf die es ankommt:
    ```perl
    foreach my $d (values %{$modules{HM485}{defptr}}) {
        next unless $d->{fwu} && $d->{IODev} && $d->{IODev} == $ioHash;
-       HM485_fwu_OnResp($d, $msgData, $msgCmd);
+       HM485_fwu_OnResp($d, $msgData, $msgCmd, $msgId);
        return $ioHash->{NAME};
    }
    ```
    Bewusst in `HM485_Parse` und nicht in `HM485_ProcessResponse`: dort werden Antworten je nach
    `msgCmd` in `ProcessResponse` **oder** `ProcessEvent` verzweigt — der Hook muss beide sehen.
-   `$msgCmd` wird für die NACK-Erkennung gebraucht.
+   `$msgCmd` wird für die NACK-Erkennung gebraucht, `$msgId` für die Zuordnung der Antwort zum
+   gesendeten Frame (sonst kann das ACK eines **anderen** Geräts das Update verschieben).
 
 ## Benutzung
 
