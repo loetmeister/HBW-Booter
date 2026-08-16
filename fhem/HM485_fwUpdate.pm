@@ -205,19 +205,31 @@ sub HM485_fwu_Step {
 #  Antwort kam (aus dem Hook in HM485_ProcessResponse). $respData = Payload-Hex.
 # ----------------------------------------------------------------------------
 sub HM485_fwu_OnResp {
-    my ($hash, $respData, $msgCmd) = @_;
+    my ($hash, $respData, $msgCmd, $msgId) = @_;
     my $fu = $hash->{fwu} or return;
     $respData = '' unless defined $respData;
+    my $target = uc(substr($hash->{DEF}, 0, 8));
 
     # NACK vom Transport: CMD_ALIVE (0x61) mit '01'<Adresse> = "Geraet hat nicht geantwortet"
     # (HM485_Parse -> HM485_SetStateNack). 00_HM485_LAN.pm hat den Frame da bereits 3x
     # wiederholt -> weiteres Warten ist sinnlos. Sofort abbrechen MIT klarer Ursache, statt
     # in Timeouts zu laufen und spaeter als "verify mismatch" zu enden.
+    # WICHTIG: Die Adresse pruefen! Der Hook leitet JEDEN Frame hierher, auch NACKs, die einem
+    # ANDEREN Geraet gelten. Waehrend des Updates ist das der Normalfall: 'z z' legt den ganzen
+    # Bus stumm, andere FHEM-Automatiken (DOIF o.ae.) senden aber weiter und kassieren NACKs.
+    # Ohne diese Pruefung brach das Update daran ab (von loetmeister am echten Bus beobachtet).
     if (defined($msgCmd) && $msgCmd == 0x61 && substr($respData, 0, 2) eq '01') {
+        return if uc(substr($respData, 2, 8)) ne $target;   # NACK galt einem anderen Geraet
         HM485_fwu_Fail($hash, 'keine Antwort vom Geraet (NACK) bei state ' . $fu->{state}
             . ' -- Geraet im Booter? App mit u-Handler? Bus/Adresse ok?');
         return;
     }
+
+    # Antwort-Zuordnung ueber die msgId: HM485_LAN_Write liefert sie beim Senden zurueck, die
+    # Antwort traegt dieselbe. Damit koennen Antworten FREMDER Geraete (deren ACK ebenfalls
+    # control 0x19 hat und sonst als unsere gelten wuerde) die State-Machine nicht verschieben.
+    # Nur aktiv, wenn der Hook $msgId mitgibt -- sonst wie bisher (rein zustandsbasiert).
+    return if (defined($msgId) && defined($fu->{reqId}) && $msgId != $fu->{reqId});
     # $respData = <Bus-Control-Byte><Nutzdaten>. NUR echte Bus-ACK-Frames gehoeren zur Anfrage:
     # deren Control ist 0x19|(seq<<5) -> untere 5 Bit == 0x19. Damit fallen BEIDE Stoerer raus,
     # die FHEM sonst dazwischenliefert und die die State-Zuordnung verschieben:
@@ -308,7 +320,12 @@ sub HM485_fwu_sendAcked {
     # IOWrite MUSS das DEVICE-hash bekommen (FHEM findet ->{IODev} selbst) -- NICHT das
     # IO-hash: exakt wie HM485_DoSendCommand (IOWrite($hash, HM485::CMD_SEND, {target,data})).
     # Mit dem IO-hash sucht IOWrite dessen ->{IODev} (gibt es nicht) -> Frame wird verworfen.
-    IOWrite($hash, HM485::CMD_SEND, { target => $target, data => $payloadHex });
+    # Rueckgabe = msgId dieses Frames; die Antwort traegt dieselbe -> Zuordnung in OnResp.
+    # Erst in eine Variable, dann zuweisen: ein direktes $hash->{fwu}{reqId} = IOWrite(...)
+    # wuerde {fwu} per Autovivification NEU anlegen, falls der Lauf zwischendrin beendet wurde.
+    my $rid = IOWrite($hash, HM485::CMD_SEND, { target => $target, data => $payloadHex });
+    return unless $hash->{fwu};
+    $hash->{fwu}{reqId} = $rid;
     RemoveInternalTimer($hash, 'HM485_fwu_Timeout');
     InternalTimer(gettimeofday() + FWU_RESP_TIMEOUT, 'HM485_fwu_Timeout', $hash);
 }
@@ -367,7 +384,8 @@ sub HM485_fwu_appcrc {
 #        foreach my $d (values %{$modules{HM485}{defptr}}) {
 #            next unless $d->{fwu} && $d->{IODev} && $d->{IODev} == $ioHash;
 #            HM485::Util::Log3($ioHash, 5, 'fwUpdate RX: msgCmd='.$msgCmd.' msgData='.$msgData);
-#            HM485_fwu_OnResp($d, $msgData, $msgCmd);     # $msgCmd NEU: fuer die NACK-Erkennung
+#            HM485_fwu_OnResp($d, $msgData, $msgCmd, $msgId);   # $msgCmd = NACK-Erkennung,
+#                                                               # $msgId  = Antwort-Zuordnung
 #            return $ioHash->{NAME};
 #        }
 #
